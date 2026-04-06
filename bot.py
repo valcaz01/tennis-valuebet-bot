@@ -3,10 +3,8 @@ Tennis Value Bet Bot — Point d'entrée principal
 Lance le bot Telegram + le scheduler de scan automatique
 """
 
-import asyncio
 import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
-from scheduler import start_scheduler
 from handlers import (
     cmd_start, cmd_help, cmd_scan, cmd_status,
     cmd_config, cmd_matches, button_callback
@@ -27,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def main():
+def main():
     logger.info("Démarrage du Tennis Value Bet Bot...")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -43,12 +41,13 @@ async def main():
     # Boutons inline
     app.add_handler(CallbackQueryHandler(button_callback))
 
-    # Scheduler (scan automatique)
-    await start_scheduler(app)
+    # Scheduler (scan automatique) — lancé automatiquement au démarrage du bot
+    from scheduler import start_scheduler
+    app.post_init = start_scheduler
 
     logger.info("Bot lancé, en attente de messages...")
-    await app.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
