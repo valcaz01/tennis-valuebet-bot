@@ -38,9 +38,9 @@ BANKROLL        = float(os.getenv("BANKROLL", "1000"))
 # ── Poids des facteurs d'analyse ────────────────────────────
 # Total doit faire 1.0
 FACTOR_WEIGHTS = {
-    "ranking":      0.30,   # Position ATP/WTA
-    "recent_form":  0.25,   # Victoires sur les 5 derniers matchs
-    "surface":      0.20,   # Win rate sur la surface en cours
+    "ranking":      0.20,   # Position ATP/WTA (réduit)
+    "recent_form":  0.30,   # Victoires sur les 5 derniers matchs (augmenté)
+    "surface":      0.25,   # Win rate sur la surface en cours (augmenté)
     "h2h":          0.15,   # Historique des confrontations directes
     "fatigue":      0.10,   # Nombre de matchs joués récemment
 }
