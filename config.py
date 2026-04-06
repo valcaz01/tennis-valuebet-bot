@@ -52,7 +52,6 @@ SCAN_INTERVAL_MINUTES = int(os.getenv("SCAN_INTERVAL", "30"))
 # ── Tournois à couvrir ──────────────────────────────────────
 # Clés The Odds API (laisser vide pour tous)
 TENNIS_SPORTS = [
-    # Grand Chelems
     "tennis_atp_french_open",
     "tennis_wta_french_open",
     "tennis_atp_us_open",
@@ -61,7 +60,6 @@ TENNIS_SPORTS = [
     "tennis_wta_wimbledon",
     "tennis_atp_australian_open",
     "tennis_wta_australian_open",
-    # Masters 1000
     "tennis_atp_monte_carlo_masters",
     "tennis_atp_miami_open",
     "tennis_atp_madrid_open",
@@ -71,7 +69,6 @@ TENNIS_SPORTS = [
     "tennis_atp_cincinnati_masters",
     "tennis_atp_shanghai_masters",
     "tennis_atp_paris_masters",
-    # WTA 1000
     "tennis_wta_miami_open",
     "tennis_wta_madrid_open",
     "tennis_wta_rome_masters",
@@ -79,12 +76,6 @@ TENNIS_SPORTS = [
     "tennis_wta_canadian_open",
     "tennis_wta_cincinnati",
     "tennis_wta_beijing",
-    # Générique (quand dispo)
-    "tennis_atp",
-    "tennis_wta",
-]
-    # Pour les tournois réguliers ATP/WTA hors Grand Chelem,
-    # utilise "tennis_atp" et "tennis_wta"
     "tennis_atp",
     "tennis_wta",
 ]
