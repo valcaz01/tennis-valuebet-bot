@@ -13,6 +13,9 @@ from handlers import (
 )
 from config import BOT_TOKEN
 
+import os
+os.makedirs("logs", exist_ok=True)
+
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
