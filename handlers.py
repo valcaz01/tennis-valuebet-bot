@@ -3,12 +3,13 @@ Handlers des commandes Telegram
 """
 
 import logging
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from data_fetcher import fetch_upcoming_matches
-from analyzer import scan_all_matches
+from analyzer import scan_all_matches, is_today
 from formatter import (
     fmt_valuebet_alert, fmt_scan_summary,
     fmt_match_list, fmt_status, escape
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 def is_authorized(update: Update) -> bool:
     """Vérifie si le chat est autorisé."""
     if not ALLOWED_CHAT_IDS:
-        return True  # Ouvert à tous
+        return True
     return update.effective_chat.id in ALLOWED_CHAT_IDS
 
 
@@ -60,14 +61,14 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "❓ *Commandes disponibles*\n\n"
-        "/scan — Lance un scan immédiat de tous les matchs\n"
-        "/matches — Liste les matchs à venir avec leurs cotes\n"
+        "/scan — Lance un scan immédiat des matchs du jour\n"
+        "/matches — Liste les matchs du jour avec leurs cotes\n"
         "/status — Affiche la configuration actuelle\n"
         "/config — Modifie les paramètres \\(soon\\)\n"
         "/help — Ce message\n\n"
         "*Comment ça marche ?*\n"
         "1\\. Je récupère les matchs et cotes via The Odds API\n"
-        "2\\. Je récupère les stats joueurs via API\\-Sports\n"
+        "2\\. Je récupère les stats joueurs via API\\-Tennis\\.com\n"
         "3\\. Je calcule une probabilité estimée \\(ranking, forme, surface, H2H, fatigue\\)\n"
         "4\\. Je compare à la probabilité implicite du marché\n"
         "5\\. Si l'edge dépasse le seuil configuré → alerte\\!"
@@ -87,15 +88,15 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         matches = await fetch_upcoming_matches()
-        vbs = await scan_all_matches(matches)
+        # Filtrer uniquement les matchs du jour
+        today_matches = [m for m in matches if is_today(m.commence_time)]
+        vbs = await scan_all_matches(today_matches)
 
-        # Résumé global
         await msg.edit_text(
-            fmt_scan_summary(vbs, len(matches)),
+            fmt_scan_summary(vbs, len(today_matches)),
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
-        # Une alerte par value bet
         for vb in vbs:
             await update.effective_message.reply_text(
                 fmt_valuebet_alert(vb),
@@ -112,12 +113,14 @@ async def cmd_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.effective_message.reply_text(
-        "⏳ Récupération des matchs\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
+        "⏳ Récupération des matchs du jour\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
     )
     try:
         matches = await fetch_upcoming_matches()
+        # Filtrer uniquement les matchs du jour
+        today_matches = [m for m in matches if is_today(m.commence_time)]
         await msg.edit_text(
-            fmt_match_list(matches), parse_mode=ParseMode.MARKDOWN_V2
+            fmt_match_list(today_matches), parse_mode=ParseMode.MARKDOWN_V2
         )
     except Exception as e:
         logger.exception("Erreur récupération matchs")
