@@ -25,6 +25,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def on_startup(app):
+    """Appelé au démarrage du bot — charge le Elo + lance le scheduler."""
+    # 1. Charger les ratings Elo
+    from elo import load_elo_ratings
+    logger.info("Chargement des ratings Elo...")
+    await load_elo_ratings()
+    logger.info("Ratings Elo chargés.")
+
+    # 2. Lancer le scheduler
+    from scheduler import start_scheduler
+    await start_scheduler(app)
+
+
 def main():
     logger.info("Démarrage du Tennis Value Bet Bot...")
 
@@ -41,9 +54,8 @@ def main():
     # Boutons inline
     app.add_handler(CallbackQueryHandler(button_callback))
 
-    # Scheduler (scan automatique) — lancé automatiquement au démarrage du bot
-    from scheduler import start_scheduler
-    app.post_init = start_scheduler
+    # Startup : Elo + Scheduler
+    app.post_init = on_startup
 
     logger.info("Bot lancé, en attente de messages...")
     app.run_polling()
