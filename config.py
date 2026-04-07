@@ -37,13 +37,15 @@ BANKROLL        = float(os.getenv("BANKROLL", "1000"))
 # ── Poids des facteurs d'analyse ────────────────────────────
 # Total doit faire 1.0
 FACTOR_WEIGHTS = {
-    "elo":          0.28,   # Rating Elo par surface (facteur principal)
-    "ranking":      0.08,   # Position ATP/WTA officielle
-    "recent_form":  0.22,   # Victoires sur les derniers matchs
-    "surface":      0.13,   # Win rate sur la surface en cours
-    "h2h":          0.10,   # Historique des confrontations directes
-    "fatigue":      0.07,   # Nombre de matchs joués récemment
-    "context":      0.12,   # Contexte tournoi (niveau, avantage local, points à défendre)
+    "elo":          0.25,   # Rating Elo par surface (facteur principal)
+    "performance":  0.16,   # Stats de perf (service, retour, BP)
+    "recent_form":  0.13,   # Victoires sur les derniers matchs
+    "market":       0.10,   # Probabilité implicite du marché (ancrage)
+    "surface":      0.09,   # Win rate dynamique sur la surface
+    "context":      0.08,   # Contexte tournoi (niveau, avantage local)
+    "h2h":          0.07,   # Historique des confrontations directes
+    "ranking":      0.07,   # Position ATP/WTA officielle
+    "fatigue":      0.05,   # Nombre de matchs joués récemment
 }
 
 # ── Scheduler ───────────────────────────────────────────────

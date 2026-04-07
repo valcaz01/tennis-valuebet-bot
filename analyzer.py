@@ -201,11 +201,12 @@ def estimate_probability(
     stats1: dict, stats2: dict,
     h2h: dict, surface: str,
     player1_name: str, player2_name: str,
-    tournament_name: str
+    tournament_name: str,
+    p_market: float = 0.5
 ) -> tuple[float, dict]:
     """
     Calcule la probabilité estimée que le joueur 1 gagne.
-    8 facteurs pondérés incluant Elo, surface dynamique, contexte et performance.
+    9 facteurs pondérés incluant Elo, performance, contexte et marché.
     """
     w = FACTOR_WEIGHTS
 
@@ -227,6 +228,7 @@ def estimate_probability(
         "fatigue":      score_fatigue(stats1, stats2),
         "context":      ctx_score,
         "performance":  score_performance(player1_name, player2_name),
+        "market":       p_market,
     }
 
     p_est = sum(factors[k] * w.get(k, 0) for k in factors)
@@ -307,7 +309,8 @@ async def analyze_match(match: Match) -> list[ValueBet]:
     p_est1, factors = estimate_probability(
         stats1, stats2, h2h, surface,
         match.player1, match.player2,
-        match.tournament
+        match.tournament,
+        p_market=p_implied1
     )
     p_est2 = 1 - p_est1
 

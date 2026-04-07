@@ -141,6 +141,7 @@ def _fmt_factors(factors: dict) -> list[str]:
         "fatigue":      "Fraîcheur",
         "context":      "Contexte",
         "performance":  "Performance",
+        "market":       "Marché",
     }
     lines = []
     items = list(factors.items())
