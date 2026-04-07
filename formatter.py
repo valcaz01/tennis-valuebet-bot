@@ -131,37 +131,27 @@ def _edge_bar(edge: float) -> str:
 
 
 def _fmt_factors(factors: dict) -> list[str]:
-    """Affiche le détail des facteurs sous forme de labels lisibles."""
+    """Affiche le détail des facteurs sous forme de mini-barres."""
     labels = {
         "elo":          "Elo",
         "ranking":      "Ranking",
         "recent_form":  "Forme récente",
         "surface":      "Surface",
+        "speed_fit":    "Vitesse surface",
         "h2h":          "H2H",
         "fatigue":      "Fraîcheur",
         "context":      "Contexte",
         "performance":  "Performance",
         "market":       "Marché",
     }
-
-    def value_label(v: float) -> str:
-        if v >= 0.65:
-            return "🟢 Fort avantage"
-        elif v >= 0.55:
-            return "✅ Avantage"
-        elif v >= 0.45:
-            return "⬜ Neutre"
-        elif v >= 0.35:
-            return "❌ Désavantage"
-        else:
-            return "🔴 Fort désavantage"
-
     lines = []
     items = list(factors.items())
     for i, (k, v) in enumerate(items):
         prefix = "└" if i == len(items) - 1 else "├"
+        bar_len = int(v * 10)
+        bar = "▓" * bar_len + "░" * (10 - bar_len)
         label = escape(labels.get(k, k))
-        lines.append(f"{prefix} {label} : {value_label(v)}")
+        lines.append(f"{prefix} {label} : `{bar}` `{v * 100:.0f}%`")
     return lines
 
 

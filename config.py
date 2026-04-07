@@ -37,14 +37,15 @@ BANKROLL        = float(os.getenv("BANKROLL", "1000"))
 # ── Poids des facteurs d'analyse ────────────────────────────
 # Total doit faire 1.0
 FACTOR_WEIGHTS = {
-    "elo":          0.25,   # Rating Elo par surface (facteur principal)
-    "performance":  0.16,   # Stats de perf (service, retour, BP)
-    "recent_form":  0.13,   # Victoires sur les derniers matchs
+    "elo":          0.23,   # Rating Elo par surface (facteur principal)
+    "performance":  0.15,   # Stats de perf (service, retour, BP)
+    "recent_form":  0.12,   # Victoires sur les derniers matchs
     "market":       0.10,   # Probabilité implicite du marché (ancrage)
-    "surface":      0.09,   # Win rate dynamique sur la surface
-    "context":      0.08,   # Contexte tournoi (niveau, avantage local)
+    "surface":      0.08,   # Win rate dynamique sur la surface
+    "speed_fit":    0.07,   # Compatibilité joueur/vitesse de surface
+    "context":      0.07,   # Contexte tournoi (niveau, avantage local)
     "h2h":          0.07,   # Historique des confrontations directes
-    "ranking":      0.07,   # Position ATP/WTA officielle
+    "ranking":      0.06,   # Position ATP/WTA officielle
     "fatigue":      0.05,   # Nombre de matchs joués récemment
 }
 
@@ -87,4 +88,4 @@ TENNIS_SPORTS = [
 ODDS_REGIONS = "eu"
 
 # Bookmakers de référence pour la démarginisation
-REFERENCE_BOOKMAKERS = ["unibet", "betclic", "winamax"]
+REFERENCE_BOOKMAKERS = ["bet365", "unibet", "betclic", "winamax", "pinnacle"]

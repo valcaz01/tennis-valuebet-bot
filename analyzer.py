@@ -14,6 +14,7 @@ from elo import (
     get_weighted_surface_winrate, get_weighted_perf_stats
 )
 from context import compute_context_score
+from surface_speed import compute_speed_factor
 from config import FACTOR_WEIGHTS, MIN_EDGE, KELLY_FRACTION, BANKROLL
 
 logger = logging.getLogger(__name__)
@@ -219,11 +220,22 @@ def estimate_probability(
         stats2.get("ranking") or 999,
     )
 
+    # Stats de performance pour le calcul de vitesse
+    perf1 = get_weighted_perf_stats(player1_name)
+    perf2 = get_weighted_perf_stats(player2_name)
+
+    speed_score = compute_speed_factor(
+        player1_name, player2_name,
+        perf1 or {}, perf2 or {},
+        tournament_name, surface
+    )
+
     factors = {
         "elo":          score_elo(player1_name, player2_name, surface),
         "ranking":      score_ranking(stats1, stats2),
         "recent_form":  score_recent_form(stats1, stats2),
         "surface":      score_surface(player1_name, player2_name, stats1, stats2, surface),
+        "speed_fit":    speed_score,
         "h2h":          score_h2h(h2h),
         "fatigue":      score_fatigue(stats1, stats2),
         "context":      ctx_score,
