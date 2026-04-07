@@ -30,12 +30,30 @@ DAYS_TO_LOAD = 90
 class SurfaceResult:
     """Un résultat de match sur une surface avec sa date."""
     won: bool
-    days_ago: int  # Nombre de jours depuis le match
+    days_ago: int
+
+
+@dataclass
+class MatchPerf:
+    """Stats de performance d'un match."""
+    days_ago: int
+    service_points_won: int = 0
+    service_points_total: int = 0
+    return_points_won: int = 0
+    return_points_total: int = 0
+    break_points_saved: int = 0
+    break_points_faced: int = 0
+    break_points_converted: int = 0
+    break_points_chances: int = 0
+    service_games_won: int = 0
+    service_games_total: int = 0
+    return_games_won: int = 0
+    return_games_total: int = 0
 
 
 @dataclass
 class PlayerElo:
-    """Ratings Elo + historique surface + retraits d'un joueur."""
+    """Ratings Elo + historique surface + retraits + perf stats d'un joueur."""
     name: str
     player_key: int
     elo_global: float = DEFAULT_ELO
@@ -43,13 +61,12 @@ class PlayerElo:
     elo_clay: float = DEFAULT_ELO
     elo_grass: float = DEFAULT_ELO
     matches_played: int = 0
-    # Historique des résultats par surface (pour win rate pondéré)
     surface_results: dict = field(default_factory=lambda: {
         "hard": [], "clay": [], "grass": []
     })
-    # Historique des retraits/walkovers
-    retirements: list = field(default_factory=list)   # [(days_ago, type)]
-    # type = "retired" ou "walkover"
+    retirements: list = field(default_factory=list)
+    # Stats de performance par match (pour moyennes pondérées)
+    perf_history: list = field(default_factory=list)  # [MatchPerf]
 
 
 # Cache global
@@ -279,6 +296,11 @@ async def load_elo_ratings():
                 elif winner == "Second Player":
                     _process_match(second_key, second_name, first_key, first_name, surface, i)
 
+                # ── Extraire les stats de performance ──
+                stats_data = match.get("statistics", [])
+                if stats_data:
+                    _extract_perf_stats(first_key, second_key, stats_data, i)
+
                 day_matches += 1
 
             total_matches += day_matches
@@ -298,6 +320,140 @@ async def load_elo_ratings():
 
 def get_player_elo(player_key: int) -> Optional[PlayerElo]:
     return _elo_ratings.get(player_key)
+
+
+def _extract_perf_stats(first_key: int, second_key: int,
+                        stats_data: list, days_ago: int):
+    """Extrait les stats de performance d'un match pour les deux joueurs."""
+    # Organiser les stats par joueur (utiliser seulement les stats "match" globales)
+    player_stats = {}
+    for stat in stats_data:
+        pk = stat.get("player_key")
+        period = stat.get("stat_period", "")
+        if period != "match":  # On ne prend que les stats du match complet
+            continue
+        if pk not in player_stats:
+            player_stats[pk] = {}
+        name = stat.get("stat_name", "")
+        player_stats[pk][name] = {
+            "won": stat.get("stat_won"),
+            "total": stat.get("stat_total"),
+            "value": stat.get("stat_value", ""),
+        }
+
+    for pk in [first_key, second_key]:
+        if pk not in player_stats:
+            continue
+        if pk not in _elo_ratings:
+            continue
+
+        ps = player_stats[pk]
+        perf = MatchPerf(days_ago=days_ago)
+
+        # Service Points Won
+        spw = ps.get("Service Points Won", {})
+        if spw.get("won") is not None and spw.get("total"):
+            perf.service_points_won = int(spw["won"])
+            perf.service_points_total = int(spw["total"])
+
+        # Return Points Won
+        rpw = ps.get("Return Points Won", {})
+        if rpw.get("won") is not None and rpw.get("total"):
+            perf.return_points_won = int(rpw["won"])
+            perf.return_points_total = int(rpw["total"])
+
+        # Break Points Saved
+        bps = ps.get("Break Points Saved", {})
+        bps_val = bps.get("value", "")
+        if "/" in str(bps_val):
+            parts = str(bps_val).split("/")
+            try:
+                perf.break_points_saved = int(parts[0])
+                perf.break_points_faced = int(parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        # Break Points Converted
+        bpc = ps.get("Break Points Converted", {})
+        bpc_val = bpc.get("value", "")
+        if "/" in str(bpc_val):
+            parts = str(bpc_val).split("/")
+            try:
+                perf.break_points_converted = int(parts[0])
+                perf.break_points_chances = int(parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        # Service games won
+        sgw = ps.get("Service games won", {})
+        if sgw.get("won") is not None and sgw.get("total"):
+            perf.service_games_won = int(sgw["won"])
+            perf.service_games_total = int(sgw["total"])
+
+        # Return games won
+        rgw = ps.get("Return games won", {})
+        if rgw.get("won") is not None and rgw.get("total"):
+            perf.return_games_won = int(rgw["won"])
+            perf.return_games_total = int(rgw["total"])
+
+        # Ajouter si on a des données significatives
+        if perf.service_points_total > 0 or perf.return_points_total > 0:
+            _elo_ratings[pk].perf_history.append(perf)
+
+
+def get_weighted_perf_stats(player_name: str) -> Optional[dict]:
+    """
+    Calcule les stats de performance moyennes pondérées par récence.
+    
+    Retourne un dict avec :
+    - service_points_won_pct : % points gagnés au service
+    - return_points_won_pct : % points gagnés au retour
+    - bp_saved_pct : % break points sauvés
+    - bp_converted_pct : % break points convertis
+    - hold_pct : % jeux de service gardés
+    - break_pct : % jeux de retour breakés
+    """
+    elo = get_elo_by_name(player_name)
+    if not elo or not elo.perf_history:
+        return None
+
+    DECAY = 60.0
+
+    # Accumulateurs pondérés
+    w_spw, w_spt = 0.0, 0.0
+    w_rpw, w_rpt = 0.0, 0.0
+    w_bps, w_bpf = 0.0, 0.0
+    w_bpc, w_bpch = 0.0, 0.0
+    w_sgw, w_sgt = 0.0, 0.0
+    w_rgw, w_rgt = 0.0, 0.0
+
+    for perf in elo.perf_history:
+        weight = math.exp(-perf.days_ago / DECAY)
+
+        w_spw += perf.service_points_won * weight
+        w_spt += perf.service_points_total * weight
+        w_rpw += perf.return_points_won * weight
+        w_rpt += perf.return_points_total * weight
+        w_bps += perf.break_points_saved * weight
+        w_bpf += perf.break_points_faced * weight
+        w_bpc += perf.break_points_converted * weight
+        w_bpch += perf.break_points_chances * weight
+        w_sgw += perf.service_games_won * weight
+        w_sgt += perf.service_games_total * weight
+        w_rgw += perf.return_games_won * weight
+        w_rgt += perf.return_games_total * weight
+
+    result = {
+        "service_points_won_pct": w_spw / w_spt if w_spt > 0 else None,
+        "return_points_won_pct": w_rpw / w_rpt if w_rpt > 0 else None,
+        "bp_saved_pct": w_bps / w_bpf if w_bpf > 0 else None,
+        "bp_converted_pct": w_bpc / w_bpch if w_bpch > 0 else None,
+        "hold_pct": w_sgw / w_sgt if w_sgt > 0 else None,
+        "break_pct": w_rgw / w_rgt if w_rgt > 0 else None,
+        "matches_with_stats": len(elo.perf_history),
+    }
+
+    return result
 
 
 def get_elo_by_name(player_name: str) -> Optional[PlayerElo]:

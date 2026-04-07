@@ -133,13 +133,14 @@ def _edge_bar(edge: float) -> str:
 def _fmt_factors(factors: dict) -> list[str]:
     """Affiche le détail des facteurs sous forme de mini-barres."""
     labels = {
-        "elo":         "Elo",
-        "ranking":     "Ranking",
-        "recent_form": "Forme récente",
-        "surface":     "Surface",
-        "h2h":         "H2H",
-        "fatigue":     "Fraîcheur",
-        "context":     "Contexte",
+        "elo":          "Elo",
+        "ranking":      "Ranking",
+        "recent_form":  "Forme récente",
+        "surface":      "Surface",
+        "h2h":          "H2H",
+        "fatigue":      "Fraîcheur",
+        "context":      "Contexte",
+        "performance":  "Performance",
     }
     lines = []
     items = list(factors.items())

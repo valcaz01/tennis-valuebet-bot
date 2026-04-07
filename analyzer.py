@@ -11,7 +11,7 @@ from typing import Optional
 from data_fetcher import Match, fetch_player_stats, fetch_h2h, get_average_odds
 from elo import (
     get_elo_by_name, elo_win_probability, DEFAULT_ELO,
-    get_weighted_surface_winrate
+    get_weighted_surface_winrate, get_weighted_perf_stats
 )
 from context import compute_context_score
 from config import FACTOR_WEIGHTS, MIN_EDGE, KELLY_FRACTION, BANKROLL
@@ -161,6 +161,40 @@ def score_fatigue(stats1: dict, stats2: dict) -> float:
     return score1 / total
 
 
+def score_performance(player1_name: str, player2_name: str) -> float:
+    """
+    Score [0-1] basé sur les stats de performance pondérées :
+    - % points gagnés au service (hold strength)
+    - % points gagnés au retour (break potential)
+    - % break points sauvés (mental au service)
+    - % break points convertis (clutch au retour)
+    
+    On combine ces 4 métriques en un score composite.
+    """
+    perf1 = get_weighted_perf_stats(player1_name)
+    perf2 = get_weighted_perf_stats(player2_name)
+
+    if not perf1 or not perf2:
+        return 0.5
+
+    # Calculer un score composite pour chaque joueur
+    # Pondération : service 35%, retour 35%, BP saved 15%, BP converted 15%
+    def composite(p):
+        spw = p.get("service_points_won_pct") or 0.6  # moyenne ATP ~63%
+        rpw = p.get("return_points_won_pct") or 0.35   # moyenne ATP ~37%
+        bps = p.get("bp_saved_pct") or 0.6              # moyenne ATP ~62%
+        bpc = p.get("bp_converted_pct") or 0.4          # moyenne ATP ~42%
+        return spw * 0.35 + rpw * 0.35 + bps * 0.15 + bpc * 0.15
+
+    c1 = composite(perf1)
+    c2 = composite(perf2)
+
+    total = c1 + c2
+    if total == 0:
+        return 0.5
+    return c1 / total
+
+
 # ── Modèle principal ──────────────────────────────────────────────────────────
 
 def estimate_probability(
@@ -171,7 +205,7 @@ def estimate_probability(
 ) -> tuple[float, dict]:
     """
     Calcule la probabilité estimée que le joueur 1 gagne.
-    7 facteurs pondérés incluant Elo, surface dynamique et contexte.
+    8 facteurs pondérés incluant Elo, surface dynamique, contexte et performance.
     """
     w = FACTOR_WEIGHTS
 
@@ -192,6 +226,7 @@ def estimate_probability(
         "h2h":          score_h2h(h2h),
         "fatigue":      score_fatigue(stats1, stats2),
         "context":      ctx_score,
+        "performance":  score_performance(player1_name, player2_name),
     }
 
     p_est = sum(factors[k] * w.get(k, 0) for k in factors)
