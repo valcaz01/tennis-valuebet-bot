@@ -13,9 +13,9 @@ from config import FACTOR_WEIGHTS, MIN_EDGE, KELLY_FRACTION, BANKROLL
 logger = logging.getLogger(__name__)
 
 # ── Filtres de sécurité ───────────────────────────────────────────────────────
-MAX_ODDS = 8.0          # Ignorer les cotes au-dessus (trop risqué, jamais fiable)
-MIN_ODDS = 1.10         # Ignorer les cotes en dessous (pas d'intérêt)
-MAX_EDGE = 0.50         # Edge max réaliste (50%) — au-delà c'est une erreur du modèle
+MAX_ODDS = 5.0          # Ignorer les cotes au-dessus (trop risqué)
+MIN_ODDS = 1.20         # Ignorer les cotes en dessous (pas d'intérêt)
+MAX_EDGE = 0.25         # Edge max réaliste (25%) — au-delà c'est probablement une erreur
 MIN_DATA_FACTORS = 2    # Nb minimum de facteurs non-neutres (≠ 0.5) pour valider
 
 
