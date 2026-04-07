@@ -25,7 +25,8 @@ class Match:
     player1: str
     player2: str
     commence_time: str
-    odds: dict = field(default_factory=dict)
+    odds: dict = field(default_factory=dict)        # h2h: {bookmaker: {player: cote}}
+    totals_odds: dict = field(default_factory=dict)  # totals: {bookmaker: {line: {over: cote, under: cote}}}
     stats: dict = field(default_factory=dict)
 
 
@@ -43,7 +44,7 @@ async def fetch_upcoming_matches() -> list[Match]:
             params = {
                 "apiKey":     ODDS_API_KEY,
                 "regions":    ODDS_REGIONS,
-                "markets":    "h2h",
+                "markets":    "h2h,totals",
                 "oddsFormat": "decimal",
             }
 
@@ -75,6 +76,16 @@ async def fetch_upcoming_matches() -> list[Match]:
                                         o["name"]: o["price"]
                                         for o in market["outcomes"]
                                     }
+                                elif market["key"] == "totals":
+                                    # Stocker over/under par ligne
+                                    for o in market["outcomes"]:
+                                        line = o.get("point")
+                                        if line is not None:
+                                            if bm_key not in match.totals_odds:
+                                                match.totals_odds[bm_key] = {}
+                                            if line not in match.totals_odds[bm_key]:
+                                                match.totals_odds[bm_key][line] = {}
+                                            match.totals_odds[bm_key][line][o["name"].lower()] = o["price"]
                         matches.append(match)
 
             except aiohttp.ClientError as e:

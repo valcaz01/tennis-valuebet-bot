@@ -10,10 +10,12 @@ from telegram.constants import ParseMode
 
 from data_fetcher import fetch_upcoming_matches
 from analyzer import scan_all_matches, is_today_or_tomorrow
+from totals_analyzer import analyze_totals, is_today_or_tomorrow as totals_filter
 from elo import get_player_withdrawals
 from formatter import (
     fmt_valuebet_alert, fmt_scan_summary,
-    fmt_match_list, fmt_status, escape
+    fmt_match_list, fmt_status, escape,
+    fmt_totals_alert, fmt_totals_summary
 )
 from config import (
     MIN_EDGE, KELLY_FRACTION, BANKROLL,
@@ -36,12 +38,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🔍 Scanner maintenant", callback_data="scan"),
-            InlineKeyboardButton("📋 Matchs du jour",     callback_data="matches"),
+            InlineKeyboardButton("🔍 Scanner ML", callback_data="scan"),
+            InlineKeyboardButton("📏 Over/Under", callback_data="totals"),
         ],
         [
-            InlineKeyboardButton("⚙️ Configuration",      callback_data="status"),
-            InlineKeyboardButton("❓ Aide",               callback_data="help"),
+            InlineKeyboardButton("📋 Matchs",     callback_data="matches"),
+            InlineKeyboardButton("❓ Aide",       callback_data="help"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -62,17 +64,17 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "❓ *Commandes disponibles*\n\n"
-        "/scan — Lance un scan immédiat des matchs du jour\n"
-        "/matches — Liste les matchs du jour avec leurs cotes\n"
-        "/status — Affiche la configuration actuelle\n"
-        "/config — Modifie les paramètres \\(soon\\)\n"
+        "/scan — Value bets Match Winner \\(J et J\\+1\\)\n"
+        "/totals — Value bets Over/Under jeux \\(J et J\\+1\\)\n"
+        "/matches — Liste les matchs à venir\n"
+        "/status — Configuration actuelle\n"
         "/help — Ce message\n\n"
         "*Comment ça marche ?*\n"
-        "1\\. Je récupère les matchs et cotes via The Odds API\n"
-        "2\\. Je récupère les stats joueurs via API\\-Tennis\\.com\n"
-        "3\\. Je calcule une probabilité estimée \\(ranking, forme, surface, H2H, fatigue\\)\n"
-        "4\\. Je compare à la probabilité implicite du marché\n"
-        "5\\. Si l'edge dépasse le seuil configuré → alerte\\!"
+        "1\\. Récupération des matchs et cotes\n"
+        "2\\. Stats joueurs via API\\-Tennis \\+ Elo calculé\n"
+        "3\\. 6 facteurs : Elo, Performance, Forme, Marché, H2H, Contexte\n"
+        "4\\. Détection des écarts significatifs avec le marché\n"
+        "5\\. Alerte si edge ≥ 5%"
     )
     await update.effective_message.reply_text(
         text, parse_mode=ParseMode.MARKDOWN_V2
@@ -161,6 +163,48 @@ async def cmd_config(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_totals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Scan des over/under jeux sur les matchs du jour et de demain."""
+    if not is_authorized(update):
+        return
+
+    msg = await update.effective_message.reply_text(
+        "⏳ Analyse Over/Under en cours\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+    try:
+        from analyzer import get_surface_from_tournament
+        matches = await fetch_upcoming_matches()
+        upcoming = [m for m in matches if totals_filter(m.commence_time)]
+
+        all_totals = []
+        for match in upcoming:
+            if not match.totals_odds:
+                continue
+            surface = get_surface_from_tournament(match.tournament)
+            bets = analyze_totals(match, surface)
+            all_totals.extend(bets)
+
+        # Trier par edge
+        all_totals.sort(key=lambda b: b.edge, reverse=True)
+
+        await msg.edit_text(
+            fmt_totals_summary(all_totals, len(upcoming)),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+        # Envoyer les 5 meilleurs
+        for tb in all_totals[:5]:
+            await update.effective_message.reply_text(
+                fmt_totals_alert(tb),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+
+    except Exception as e:
+        logger.exception("Erreur lors du scan totals")
+        await msg.edit_text(f"❌ Erreur : {escape(str(e))}", parse_mode=ParseMode.MARKDOWN_V2)
+
+
 async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Gère les clics sur les boutons inline."""
     query = update.callback_query
@@ -171,6 +215,8 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_scan(update, ctx)
     elif action == "matches":
         await cmd_matches(update, ctx)
+    elif action == "totals":
+        await cmd_totals(update, ctx)
     elif action == "status":
         await cmd_status(update, ctx)
     elif action == "help":

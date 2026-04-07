@@ -7,7 +7,7 @@ import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 from handlers import (
     cmd_start, cmd_help, cmd_scan, cmd_status,
-    cmd_config, cmd_matches, button_callback
+    cmd_config, cmd_matches, cmd_totals, button_callback
 )
 from config import BOT_TOKEN
 
@@ -48,6 +48,7 @@ def main():
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("scan",    cmd_scan))
     app.add_handler(CommandHandler("matches", cmd_matches))
+    app.add_handler(CommandHandler("totals",  cmd_totals))
     app.add_handler(CommandHandler("status",  cmd_status))
     app.add_handler(CommandHandler("config",  cmd_config))
 

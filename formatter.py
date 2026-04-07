@@ -211,3 +211,63 @@ def _fmt_withdrawals(player: str, player_wd: dict,
         lines.insert(0, f"🏥 *Alertes santé*")
 
     return lines
+
+
+def fmt_totals_alert(tb) -> str:
+    """Message d'alerte pour un pari over/under détecté."""
+    from totals_analyzer import is_tomorrow as _is_tmrw
+    dt = datetime.fromisoformat(tb.match.commence_time.replace("Z", "+00:00"))
+    match_time = dt.strftime("%d/%m %H:%M UTC")
+    tomorrow_badge = " ⏰ _DEMAIN_" if _is_tmrw(tb.match.commence_time) else ""
+
+    side_emoji = "⬆️" if tb.side == "over" else "⬇️"
+    side_label = f"Over {tb.line}" if tb.side == "over" else f"Under {tb.line}"
+
+    lines = [
+        f"{side_emoji} *{escape(side_label)} JEUX*{tomorrow_badge}",
+        f"",
+        f"🏆 {escape(tb.match.tournament)}",
+        f"📅 {escape(match_time)}",
+        f"🆚 {escape(tb.match.player1)} vs {escape(tb.match.player2)}",
+        f"",
+        f"📊 *Analyse*",
+        f"├ Jeux estimés : `{tb.estimated_games:.1f}`",
+        f"├ Ligne : `{tb.line}`",
+        f"├ Cote : `{tb.best_odds:.2f}` \\({escape(tb.bookmaker)}\\)",
+        f"└ Edge : `{tb.edge_pct}`",
+        f"",
+        f"💡 *Confiance :* {tb.confidence}",
+        f"",
+        f"⚠️ _Pari à tes risques\\. Joue responsable\\._",
+    ]
+
+    return "\n".join(lines)
+
+
+def fmt_totals_summary(totals_bets: list, matches_count: int) -> str:
+    """Résumé des paris over/under détectés."""
+    ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    if not totals_bets:
+        return (
+            f"📏 *Scan Over/Under terminé* \\({escape(ts)}\\)\n"
+            f"Matchs analysés : {matches_count}\n"
+            f"Aucun value bet over/under détecté\\."
+        )
+
+    from totals_analyzer import is_tomorrow as _is_tmrw
+    lines = [
+        f"📏 *Scan Over/Under terminé* \\({escape(ts)}\\)",
+        f"Matchs analysés : `{matches_count}`",
+        f"Value bets trouvés : `{len(totals_bets)}`",
+        f"",
+    ]
+    for i, tb in enumerate(totals_bets, 1):
+        side_emoji = "⬆️" if tb.side == "over" else "⬇️"
+        side_label = f"O{tb.line}" if tb.side == "over" else f"U{tb.line}"
+        tomorrow = " ⏰" if _is_tmrw(tb.match.commence_time) else ""
+        lines.append(
+            f"{i}\\. {side_emoji} {escape(side_label)} {escape(tb.match.player1)} vs {escape(tb.match.player2)}{tomorrow} "
+            f"— cote `{tb.best_odds:.2f}` — edge `{tb.edge_pct}`"
+        )
+
+    return "\n".join(lines)
