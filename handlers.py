@@ -9,14 +9,13 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from data_fetcher import fetch_upcoming_matches
-from analyzer import scan_all_matches, is_today_or_tomorrow
+from analyzer import scan_all_matches, is_today_or_tomorrow, get_surface_from_tournament
 from totals_analyzer import analyze_totals, is_today_or_tomorrow as totals_filter
 from elo import get_player_withdrawals
 from tracker import record_bet, verify_results, get_stats
 from formatter import (
-    fmt_valuebet_alert, fmt_scan_summary,
-    fmt_match_list, fmt_status, escape,
-    fmt_totals_alert, fmt_totals_summary
+    fmt_scan_compact, fmt_totals_compact,
+    fmt_match_list, fmt_status, escape
 )
 from config import (
     MIN_EDGE, KELLY_FRACTION, BANKROLL,
@@ -27,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 def is_authorized(update: Update) -> bool:
-    """Vérifie si le chat est autorisé."""
     if not ALLOWED_CHAT_IDS:
         return True
     return update.effective_chat.id in ALLOWED_CHAT_IDS
@@ -71,6 +69,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/scan — Value bets Match Winner \\(J et J\\+1\\)\n"
         "/totals — Value bets Over/Under jeux \\(J et J\\+1\\)\n"
         "/matches — Liste les matchs à venir\n"
+        "/results — Performances et ROI du bot\n"
         "/status — Configuration actuelle\n"
         "/help — Ce message\n\n"
         "*Comment ça marche ?*\n"
@@ -90,22 +89,16 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.effective_message.reply_text(
-        "⏳ Scan en cours\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
+        "⏳ Scan ML en cours\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
     )
 
     try:
         matches = await fetch_upcoming_matches()
-        # Filtrer les matchs du jour et de demain
-        upcoming_matches = [m for m in matches if is_today_or_tomorrow(m.commence_time)]
-        vbs = await scan_all_matches(upcoming_matches)
+        upcoming = [m for m in matches if is_today_or_tomorrow(m.commence_time)]
+        vbs = await scan_all_matches(upcoming)
 
-        await msg.edit_text(
-            fmt_scan_summary(vbs, len(upcoming_matches)),
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-
+        # Enregistrer les bets pour le tracking
         for vb in vbs:
-            # Enregistrer le bet pour le tracking
             record_bet(
                 bet_type="ml", match_id=vb.match.id,
                 tournament=vb.match.tournament,
@@ -115,15 +108,68 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 kelly_stake=vb.kelly_stake,
                 commence_time=vb.match.commence_time,
             )
-            p_wd = get_player_withdrawals(vb.player)
-            o_wd = get_player_withdrawals(vb.opponent)
-            await update.effective_message.reply_text(
-                fmt_valuebet_alert(vb, p_wd, o_wd),
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
+
+        # Collecter les alertes santé
+        withdrawals = {}
+        for vb in vbs:
+            for name in [vb.player, vb.opponent]:
+                if name not in withdrawals:
+                    withdrawals[name] = get_player_withdrawals(name)
+
+        # Un seul message compact
+        await msg.edit_text(
+            fmt_scan_compact(vbs, len(upcoming), withdrawals),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
 
     except Exception as e:
         logger.exception("Erreur lors du scan")
+        await msg.edit_text(f"❌ Erreur : {escape(str(e))}", parse_mode=ParseMode.MARKDOWN_V2)
+
+
+async def cmd_totals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+
+    msg = await update.effective_message.reply_text(
+        "⏳ Analyse Over/Under en cours\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+    try:
+        matches = await fetch_upcoming_matches()
+        upcoming = [m for m in matches if totals_filter(m.commence_time)]
+
+        all_totals = []
+        for match in upcoming:
+            if not match.totals_odds:
+                continue
+            surface = get_surface_from_tournament(match.tournament)
+            bets = analyze_totals(match, surface)
+            all_totals.extend(bets)
+
+        all_totals.sort(key=lambda b: b.edge, reverse=True)
+        top_totals = all_totals[:5]
+
+        # Enregistrer les bets
+        for tb in top_totals:
+            record_bet(
+                bet_type=tb.side, match_id=tb.match.id,
+                tournament=tb.match.tournament,
+                player=tb.match.player1, opponent=tb.match.player2,
+                odds=tb.best_odds, edge=tb.edge,
+                p_estimated=0, kelly_stake=0,
+                commence_time=tb.match.commence_time,
+                side=tb.side, line=tb.line,
+            )
+
+        # Un seul message compact
+        await msg.edit_text(
+            fmt_totals_compact(top_totals, len(upcoming)),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+    except Exception as e:
+        logger.exception("Erreur lors du scan totals")
         await msg.edit_text(f"❌ Erreur : {escape(str(e))}", parse_mode=ParseMode.MARKDOWN_V2)
 
 
@@ -136,10 +182,9 @@ async def cmd_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     try:
         matches = await fetch_upcoming_matches()
-        # Filtrer les matchs du jour et de demain
-        upcoming_matches = [m for m in matches if is_today_or_tomorrow(m.commence_time)]
+        upcoming = [m for m in matches if is_today_or_tomorrow(m.commence_time)]
         await msg.edit_text(
-            fmt_match_list(upcoming_matches), parse_mode=ParseMode.MARKDOWN_V2
+            fmt_match_list(upcoming), parse_mode=ParseMode.MARKDOWN_V2
         )
     except Exception as e:
         logger.exception("Erreur récupération matchs")
@@ -177,59 +222,7 @@ async def cmd_config(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def cmd_totals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Scan des over/under jeux sur les matchs du jour et de demain."""
-    if not is_authorized(update):
-        return
-
-    msg = await update.effective_message.reply_text(
-        "⏳ Analyse Over/Under en cours\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
-    )
-
-    try:
-        from analyzer import get_surface_from_tournament
-        matches = await fetch_upcoming_matches()
-        upcoming = [m for m in matches if totals_filter(m.commence_time)]
-
-        all_totals = []
-        for match in upcoming:
-            if not match.totals_odds:
-                continue
-            surface = get_surface_from_tournament(match.tournament)
-            bets = analyze_totals(match, surface)
-            all_totals.extend(bets)
-
-        # Trier par edge
-        all_totals.sort(key=lambda b: b.edge, reverse=True)
-
-        await msg.edit_text(
-            fmt_totals_summary(all_totals, len(upcoming)),
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-
-        # Envoyer les 5 meilleurs
-        for tb in all_totals[:5]:
-            record_bet(
-                bet_type=tb.side, match_id=tb.match.id,
-                tournament=tb.match.tournament,
-                player=tb.match.player1, opponent=tb.match.player2,
-                odds=tb.best_odds, edge=tb.edge,
-                p_estimated=0, kelly_stake=0,
-                commence_time=tb.match.commence_time,
-                side=tb.side, line=tb.line,
-            )
-            await update.effective_message.reply_text(
-                fmt_totals_alert(tb),
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-
-    except Exception as e:
-        logger.exception("Erreur lors du scan totals")
-        await msg.edit_text(f"❌ Erreur : {escape(str(e))}", parse_mode=ParseMode.MARKDOWN_V2)
-
-
 async def cmd_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Affiche les performances du bot."""
     if not is_authorized(update):
         return
 
@@ -238,10 +231,7 @@ async def cmd_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        # Vérifier les résultats en attente
         verified = await verify_results()
-
-        # Calculer les stats
         stats_30d = get_stats(days=30)
         stats_all = get_stats(days=0)
 
@@ -285,7 +275,6 @@ async def cmd_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Gère les clics sur les boutons inline."""
     query = update.callback_query
     await query.answer()
 
@@ -305,13 +294,15 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_valuebet_alert(app, chat_id: int, vb):
-    """Envoie une alerte value bet à un chat donné (appelé par le scheduler)."""
+    """Envoie une alerte ML (appelé par le scheduler)."""
     try:
-        p_wd = get_player_withdrawals(vb.player)
-        o_wd = get_player_withdrawals(vb.opponent)
+        withdrawals = {
+            vb.player: get_player_withdrawals(vb.player),
+            vb.opponent: get_player_withdrawals(vb.opponent),
+        }
         await app.bot.send_message(
             chat_id=chat_id,
-            text=fmt_valuebet_alert(vb, p_wd, o_wd),
+            text=fmt_scan_compact([vb], 1, withdrawals),
             parse_mode=ParseMode.MARKDOWN_V2,
         )
     except Exception as e:
