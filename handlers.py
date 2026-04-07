@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 
 from data_fetcher import fetch_upcoming_matches
 from analyzer import scan_all_matches, is_today
+from elo import get_player_withdrawals
 from formatter import (
     fmt_valuebet_alert, fmt_scan_summary,
     fmt_match_list, fmt_status, escape
@@ -98,8 +99,10 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
         for vb in vbs:
+            p_wd = get_player_withdrawals(vb.player)
+            o_wd = get_player_withdrawals(vb.opponent)
             await update.effective_message.reply_text(
-                fmt_valuebet_alert(vb),
+                fmt_valuebet_alert(vb, p_wd, o_wd),
                 parse_mode=ParseMode.MARKDOWN_V2
             )
 
@@ -177,9 +180,11 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def send_valuebet_alert(app, chat_id: int, vb):
     """Envoie une alerte value bet à un chat donné (appelé par le scheduler)."""
     try:
+        p_wd = get_player_withdrawals(vb.player)
+        o_wd = get_player_withdrawals(vb.opponent)
         await app.bot.send_message(
             chat_id=chat_id,
-            text=fmt_valuebet_alert(vb),
+            text=fmt_valuebet_alert(vb, p_wd, o_wd),
             parse_mode=ParseMode.MARKDOWN_V2,
         )
     except Exception as e:

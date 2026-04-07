@@ -35,7 +35,7 @@ class SurfaceResult:
 
 @dataclass
 class PlayerElo:
-    """Ratings Elo + historique surface d'un joueur."""
+    """Ratings Elo + historique surface + retraits d'un joueur."""
     name: str
     player_key: int
     elo_global: float = DEFAULT_ELO
@@ -47,6 +47,9 @@ class PlayerElo:
     surface_results: dict = field(default_factory=lambda: {
         "hard": [], "clay": [], "grass": []
     })
+    # Historique des retraits/walkovers
+    retirements: list = field(default_factory=list)   # [(days_ago, type)]
+    # type = "retired" ou "walkover"
 
 
 # Cache global
@@ -227,12 +230,7 @@ async def load_elo_ratings():
 
             day_matches = 0
             for match in results:
-                if match.get("event_status") != "Finished":
-                    continue
-                winner = match.get("event_winner")
-                if not winner:
-                    continue
-
+                status = match.get("event_status", "")
                 first_key = match.get("first_player_key")
                 second_key = match.get("second_player_key")
                 first_name = match.get("event_first_player", "")
@@ -244,6 +242,34 @@ async def load_elo_ratings():
 
                 event_type = match.get("event_type_type", "")
                 if "double" in event_type.lower():
+                    continue
+
+                # ── Tracker les retraits et walkovers ──
+                if status == "Retired":
+                    # Le perdant est celui qui a abandonné
+                    winner = match.get("event_winner")
+                    if winner == "First Player":
+                        _ensure_player(second_key, second_name)
+                        _elo_ratings[second_key].retirements.append((i, "retired"))
+                    elif winner == "Second Player":
+                        _ensure_player(first_key, first_name)
+                        _elo_ratings[first_key].retirements.append((i, "retired"))
+
+                elif status == "Walk Over":
+                    # Le perdant est celui qui a déclaré forfait
+                    winner = match.get("event_winner")
+                    if winner == "First Player":
+                        _ensure_player(second_key, second_name)
+                        _elo_ratings[second_key].retirements.append((i, "walkover"))
+                    elif winner == "Second Player":
+                        _ensure_player(first_key, first_name)
+                        _elo_ratings[first_key].retirements.append((i, "walkover"))
+
+                # ── Traitement normal des matchs terminés ──
+                if status != "Finished" and status != "Retired":
+                    continue
+                winner = match.get("event_winner")
+                if not winner:
                     continue
 
                 surface = _detect_surface(tournament)
@@ -311,3 +337,46 @@ def get_surface_elo(player_key: int, surface: str) -> float:
 
 def elo_win_probability(elo_a: float, elo_b: float) -> float:
     return expected_score(elo_a, elo_b)
+
+
+def _ensure_player(player_key: int, player_name: str):
+    """Crée un joueur dans le cache s'il n'existe pas encore."""
+    if player_key not in _elo_ratings:
+        _elo_ratings[player_key] = PlayerElo(name=player_name, player_key=player_key)
+
+
+def get_player_withdrawals(player_name: str) -> dict:
+    """
+    Retourne l'historique des retraits/walkovers d'un joueur.
+    {
+        "total": int,
+        "retirements": int,
+        "walkovers": int,
+        "last_withdrawal": {"days_ago": int, "type": str} ou None,
+        "has_recent": bool  (dans les 14 derniers jours)
+    }
+    """
+    elo = get_elo_by_name(player_name)
+    if not elo or not elo.retirements:
+        return {
+            "total": 0,
+            "retirements": 0,
+            "walkovers": 0,
+            "last_withdrawal": None,
+            "has_recent": False,
+        }
+
+    retirements = [(d, t) for d, t in elo.retirements if t == "retired"]
+    walkovers = [(d, t) for d, t in elo.retirements if t == "walkover"]
+
+    # Trouver le plus récent
+    all_sorted = sorted(elo.retirements, key=lambda x: x[0])
+    last = all_sorted[0] if all_sorted else None
+
+    return {
+        "total": len(elo.retirements),
+        "retirements": len(retirements),
+        "walkovers": len(walkovers),
+        "last_withdrawal": {"days_ago": last[0], "type": last[1]} if last else None,
+        "has_recent": last[0] <= 14 if last else False,
+    }

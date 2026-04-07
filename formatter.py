@@ -7,7 +7,8 @@ from analyzer import ValueBet
 from data_fetcher import Match
 
 
-def fmt_valuebet_alert(vb: ValueBet) -> str:
+def fmt_valuebet_alert(vb: ValueBet, player_withdrawals: dict = None,
+                       opponent_withdrawals: dict = None) -> str:
     """Message d'alerte pour un value bet détecté."""
     dt = datetime.fromisoformat(vb.match.commence_time.replace("Z", "+00:00"))
     match_time = dt.strftime("%d/%m %H:%M UTC")
@@ -33,10 +34,19 @@ def fmt_valuebet_alert(vb: ValueBet) -> str:
         f"💶 *Mise Kelly* \\(¼\\) : `{vb.kelly_stake:.0f} €`",
         f"",
         f"📈 *Facteurs*",
-    ] + _fmt_factors(vb.factors) + [
+    ] + _fmt_factors(vb.factors)
+
+    # ── Section retraits ──
+    withdrawal_lines = _fmt_withdrawals(vb.player, player_withdrawals,
+                                         vb.opponent, opponent_withdrawals)
+    if withdrawal_lines:
+        lines.append(f"")
+        lines.extend(withdrawal_lines)
+
+    lines.extend([
         f"",
         f"⚠️ _Pari à tes risques\\. Joue responsable\\._",
-    ]
+    ])
 
     return "\n".join(lines)
 
@@ -139,4 +149,52 @@ def _fmt_factors(factors: dict) -> list[str]:
         bar = "▓" * bar_len + "░" * (10 - bar_len)
         label = escape(labels.get(k, k))
         lines.append(f"{prefix} {label} : `{bar}` `{v * 100:.0f}%`")
+    return lines
+
+
+def _fmt_withdrawals(player: str, player_wd: dict,
+                     opponent: str, opponent_wd: dict) -> list[str]:
+    """Formate la section retraits/walkovers."""
+    lines = []
+    has_info = False
+
+    for name, wd in [(player, player_wd), (opponent, opponent_wd)]:
+        if not wd or wd.get("total", 0) == 0:
+            continue
+
+        has_info = True
+        total = wd["total"]
+        ret = wd["retirements"]
+        wo = wd["walkovers"]
+        last = wd.get("last_withdrawal")
+
+        if last:
+            days = last["days_ago"]
+            wtype = "abandon" if last["type"] == "retired" else "forfait"
+
+            if days <= 7:
+                emoji = "🔴"
+                urgency = "ATTENTION"
+            elif days <= 14:
+                emoji = "🟠"
+                urgency = "Récent"
+            else:
+                emoji = "🟡"
+                urgency = "Noté"
+
+            lines.append(
+                f"{emoji} *{escape(urgency)}* — {escape(name)} : "
+                f"dernier {escape(wtype)} il y a `{days}` jours"
+            )
+            if total > 1:
+                detail = []
+                if ret > 0:
+                    detail.append(f"{ret} abandon\\(s\\)")
+                if wo > 0:
+                    detail.append(f"{wo} forfait\\(s\\)")
+                lines.append(f"   _{escape(str(total))} incidents sur 90j : {', '.join(detail)}_")
+
+    if has_info:
+        lines.insert(0, f"🏥 *Alertes santé*")
+
     return lines
