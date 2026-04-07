@@ -20,10 +20,9 @@ ALLOWED_CHAT_IDS: list[int] = [8425473716]
 ODDS_API_KEY    = os.getenv("ODDS_API_KEY", "TON_ODDS_API_KEY")
 ODDS_API_BASE   = "https://api.the-odds-api.com/v4"
 
-# API-Sports (tennis stats)  → https://rapidapi.com/api-sports
-# Plan gratuit : 100 req/jour
-APISPORTS_KEY   = os.getenv("APISPORTS_KEY", "TON_APISPORTS_KEY")
-APISPORTS_BASE  = "https://v1.tennis.api-sports.io"
+# API-Tennis.com → https://api-tennis.com  (essai 14 jours puis 40$/mois)
+APITENNIS_KEY   = os.getenv("APITENNIS_KEY", "TON_APITENNIS_KEY")
+APITENNIS_BASE  = "https://api.api-tennis.com/tennis/"
 
 # ── Paramètres value bet ────────────────────────────────────
 # Edge minimum pour déclencher une alerte (ex: 0.05 = 5%)
@@ -39,7 +38,7 @@ BANKROLL        = float(os.getenv("BANKROLL", "1000"))
 # Total doit faire 1.0
 FACTOR_WEIGHTS = {
     "ranking":      0.20,   # Position ATP/WTA (réduit)
-    "recent_form":  0.30,   # Victoires sur les 5 derniers matchs (augmenté)
+    "recent_form":  0.30,   # Victoires sur les derniers matchs (augmenté)
     "surface":      0.25,   # Win rate sur la surface en cours (augmenté)
     "h2h":          0.15,   # Historique des confrontations directes
     "fatigue":      0.10,   # Nombre de matchs joués récemment
@@ -49,8 +48,8 @@ FACTOR_WEIGHTS = {
 # Intervalle de scan automatique (en minutes)
 SCAN_INTERVAL_MINUTES = int(os.getenv("SCAN_INTERVAL", "30"))
 
-# ── Tournois à couvrir ──────────────────────────────────────
-# Clés The Odds API (laisser vide pour tous)
+# ── Tournois à couvrir (The Odds API) ───────────────────────
+# Clés The Odds API — les matchs sont récupérés ici
 TENNIS_SPORTS = [
     "tennis_atp_french_open",
     "tennis_wta_french_open",

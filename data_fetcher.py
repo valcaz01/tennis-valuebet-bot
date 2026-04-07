@@ -1,5 +1,7 @@
 """
-Collecte de données : cotes (The Odds API) + stats joueurs (API-Sports)
+Collecte de données :
+  - Cotes → The Odds API
+  - Stats joueurs, rankings, H2H → API-Tennis.com
 """
 
 import logging
@@ -8,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from config import (
     ODDS_API_KEY, ODDS_API_BASE,
-    APISPORTS_KEY, APISPORTS_BASE,
+    APITENNIS_KEY, APITENNIS_BASE,
     TENNIS_SPORTS, ODDS_REGIONS, REFERENCE_BOOKMAKERS
 )
 
@@ -23,13 +25,13 @@ class Match:
     player1: str
     player2: str
     commence_time: str
-    # Cotes brutes {bookmaker: {player: cote}}
     odds: dict = field(default_factory=dict)
-    # Stats joueurs {player: {stat: valeur}}
     stats: dict = field(default_factory=dict)
 
 
-# ── The Odds API ──────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  THE ODDS API — Récupération des matchs et cotes
+# ══════════════════════════════════════════════════════════════════════════════
 
 async def fetch_upcoming_matches() -> list[Match]:
     """Récupère tous les matchs à venir avec leurs cotes."""
@@ -48,7 +50,6 @@ async def fetch_upcoming_matches() -> list[Match]:
             try:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 404:
-                        # Tournoi pas en cours actuellement
                         continue
                     if resp.status != 200:
                         logger.warning(f"Odds API {sport}: HTTP {resp.status}")
@@ -66,7 +67,6 @@ async def fetch_upcoming_matches() -> list[Match]:
                             player2=event["away_team"],
                             commence_time=event["commence_time"],
                         )
-                        # Extraire les cotes par bookmaker
                         for bm in event.get("bookmakers", []):
                             bm_key = bm["key"]
                             for market in bm.get("markets", []):
@@ -102,7 +102,6 @@ def get_average_odds(match: Match, player: str,
     for bm, bm_odds in match.odds.items():
         if bm in target and player in bm_odds:
             values.append(bm_odds[player])
-    # Fallback sur tous les bookmakers si aucun de référence trouvé
     if not values:
         for bm_odds in match.odds.values():
             cote = bm_odds.get(player)
@@ -111,127 +110,249 @@ def get_average_odds(match: Match, player: str,
     return sum(values) / len(values) if values else None
 
 
-# ── API-Sports (tennis stats) ─────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  API-TENNIS.COM — Stats joueurs, rankings, H2H
+# ══════════════════════════════════════════════════════════════════════════════
 
-async def fetch_player_stats(player_name: str) -> dict:
-    """
-    Récupère les stats d'un joueur via API-Sports.
-    Retourne un dict avec ranking, recent_form, surface_win_rates, h2h dispo.
-    """
-    headers = {"x-apisports-key": APISPORTS_KEY}
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        # 1. Recherche du joueur
-        player_id = await _get_player_id(session, player_name)
-        if not player_id:
-            logger.warning(f"Joueur non trouvé : {player_name}")
-            return {}
-
-        # 2. Stats générales
-        stats = await _get_player_ranking_stats(session, player_id)
-
-        return stats
+# Cache des player_key pour éviter les appels répétés
+_player_key_cache: dict[str, Optional[int]] = {}
+_rankings_cache: dict[str, list[dict]] = {}
 
 
-async def _get_player_id(session: aiohttp.ClientSession, name: str) -> Optional[int]:
-    """Cherche l'ID d'un joueur par son nom."""
+async def _api_tennis_request(session: aiohttp.ClientSession, params: dict) -> dict:
+    """Appel générique à l'API-Tennis.com."""
+    params["APIkey"] = APITENNIS_KEY
     try:
         async with session.get(
-            f"{APISPORTS_BASE}/players",
-            params={"search": name},
-            timeout=aiohttp.ClientTimeout(total=10)
+            APITENNIS_BASE,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=15)
         ) as resp:
             if resp.status != 200:
-                return None
+                logger.warning(f"API-Tennis HTTP {resp.status} pour {params.get('method')}")
+                return {}
             data = await resp.json()
-            results = data.get("response", [])
-            if results:
-                return results[0]["id"]
+            if data.get("success") != 1:
+                logger.warning(f"API-Tennis erreur : {data}")
+                return {}
+            return data
     except aiohttp.ClientError as e:
-        logger.error(f"Erreur API-Sports player search: {e}")
+        logger.error(f"Erreur réseau API-Tennis ({params.get('method')}): {e}")
+        return {}
+
+
+async def load_rankings(event_type: str = "ATP") -> list[dict]:
+    """
+    Charge le classement ATP ou WTA.
+    Retourne une liste de {place, player, player_key, points, country}.
+    Résultat mis en cache.
+    """
+    if event_type in _rankings_cache:
+        return _rankings_cache[event_type]
+
+    async with aiohttp.ClientSession() as session:
+        data = await _api_tennis_request(session, {
+            "method": "get_standings",
+            "event_type": event_type,
+        })
+
+    rankings = data.get("result", [])
+    _rankings_cache[event_type] = rankings
+    logger.info(f"Rankings {event_type} chargés : {len(rankings)} joueurs")
+    return rankings
+
+
+async def find_player_key(player_name: str) -> Optional[int]:
+    """
+    Trouve le player_key à partir du nom du joueur.
+    Cherche d'abord dans le cache, puis dans les rankings ATP et WTA.
+    """
+    name_lower = player_name.lower().strip()
+
+    # Vérifier le cache
+    if name_lower in _player_key_cache:
+        return _player_key_cache[name_lower]
+
+    # Charger les rankings si pas encore fait
+    for event_type in ["ATP", "WTA"]:
+        rankings = await load_rankings(event_type)
+        for r in rankings:
+            r_name = r.get("player", "").lower().strip()
+            r_key = r.get("player_key")
+            # Cache tous les joueurs au passage
+            if r_name and r_key:
+                _player_key_cache[r_name] = int(r_key)
+
+    # Chercher par correspondance exacte
+    if name_lower in _player_key_cache:
+        return _player_key_cache[name_lower]
+
+    # Chercher par correspondance partielle (nom de famille)
+    parts = name_lower.split()
+    for cached_name, cached_key in _player_key_cache.items():
+        # Match sur le nom de famille
+        if parts[-1] in cached_name or cached_name.split()[-1] in name_lower:
+            _player_key_cache[name_lower] = cached_key
+            return cached_key
+
+    logger.warning(f"Joueur non trouvé : {player_name}")
+    _player_key_cache[name_lower] = None
     return None
 
 
-async def _get_player_ranking_stats(session: aiohttp.ClientSession,
-                                     player_id: int) -> dict:
-    """Récupère le ranking et les statistiques récentes d'un joueur."""
+async def fetch_player_stats(player_name: str) -> dict:
+    """
+    Récupère les stats d'un joueur via API-Tennis.com.
+    Retourne un dict avec ranking, points, recent_form, surface_win_rates, etc.
+    """
     stats = {
         "ranking": None,
         "ranking_points": None,
-        "recent_form": [],      # Liste des résultats récents (True=victoire)
-        "surface_win_rates": {},  # {"clay": 0.7, "hard": 0.6, ...}
-        "fatigue_score": 0,     # Nb de matchs joués dans les 7 derniers jours
+        "recent_form": [],
+        "surface_win_rates": {},
+        "fatigue_score": 0,
+        "matches_won": 0,
+        "matches_lost": 0,
     }
 
-    try:
-        async with session.get(
-            f"{APISPORTS_BASE}/rankings",
-            params={"player": player_id},
-            timeout=aiohttp.ClientTimeout(total=10)
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                results = data.get("response", [])
-                if results:
-                    latest = results[0]
-                    stats["ranking"] = latest.get("position")
-                    stats["ranking_points"] = latest.get("points")
+    player_key = await find_player_key(player_name)
+    if not player_key:
+        return stats
 
-        # Stats par surface (si disponibles)
-        for surface in ["clay", "hard", "grass", "carpet"]:
-            async with session.get(
-                f"{APISPORTS_BASE}/statistics",
-                params={"player": player_id, "surface": surface},
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    results = data.get("response", [])
-                    if results:
-                        r = results[0]
-                        wins = r.get("wins", 0)
-                        losses = r.get("losses", 0)
-                        total = wins + losses
-                        if total > 0:
-                            stats["surface_win_rates"][surface] = wins / total
+    # ── Ranking depuis le cache ──
+    for event_type in ["ATP", "WTA"]:
+        rankings = await load_rankings(event_type)
+        for r in rankings:
+            if int(r.get("player_key", 0)) == player_key:
+                stats["ranking"] = int(r.get("place", 999))
+                stats["ranking_points"] = int(r.get("points", 0))
+                break
+        if stats["ranking"]:
+            break
 
-    except aiohttp.ClientError as e:
-        logger.error(f"Erreur API-Sports stats: {e}")
+    # ── Stats détaillées du joueur ──
+    async with aiohttp.ClientSession() as session:
+        data = await _api_tennis_request(session, {
+            "method": "get_players",
+            "player_key": player_key,
+        })
+
+    results = data.get("result", [])
+    if not results:
+        return stats
+
+    player_data = results[0]
+    player_stats = player_data.get("stats", [])
+
+    # Trouver les stats singles de la saison en cours et précédente
+    current_year = "2026"
+    prev_year = "2025"
+    singles_stats = [
+        s for s in player_stats
+        if s.get("type") == "singles" and s.get("season") in [current_year, prev_year]
+    ]
+
+    if not singles_stats:
+        # Fallback : prendre les stats singles les plus récentes
+        singles_stats = [
+            s for s in player_stats if s.get("type") == "singles"
+        ]
+        singles_stats.sort(key=lambda s: s.get("season", "0"), reverse=True)
+        singles_stats = singles_stats[:2]
+
+    # Calculer les win rates par surface
+    total_won = 0
+    total_lost = 0
+    for s in singles_stats:
+        for surface in ["hard", "clay", "grass"]:
+            won = int(s.get(f"{surface}_won") or 0)
+            lost = int(s.get(f"{surface}_lost") or 0)
+            total = won + lost
+            if total > 0:
+                if surface not in stats["surface_win_rates"]:
+                    stats["surface_win_rates"][surface] = {"won": 0, "lost": 0}
+                stats["surface_win_rates"][surface]["won"] += won
+                stats["surface_win_rates"][surface]["lost"] += lost
+
+        season_won = int(s.get("matches_won") or 0)
+        season_lost = int(s.get("matches_lost") or 0)
+        total_won += season_won
+        total_lost += season_lost
+
+    # Convertir en taux
+    for surface, data_s in stats["surface_win_rates"].items():
+        total = data_s["won"] + data_s["lost"]
+        stats["surface_win_rates"][surface] = data_s["won"] / total if total > 0 else 0.5
+
+    stats["matches_won"] = total_won
+    stats["matches_lost"] = total_lost
+
+    # Forme récente : ratio victoires/total sur la saison en cours
+    if singles_stats:
+        latest = singles_stats[0]
+        w = int(latest.get("matches_won") or 0)
+        l = int(latest.get("matches_lost") or 0)
+        total = w + l
+        if total > 0:
+            # Simuler une forme récente (True = victoire)
+            recent_count = min(10, total)
+            wins_in_recent = round(w / total * recent_count)
+            stats["recent_form"] = [True] * wins_in_recent + [False] * (recent_count - wins_in_recent)
+
+    # Fatigue : estimation basée sur le nombre de matchs cette saison
+    if singles_stats:
+        latest = singles_stats[0]
+        total_matches = int(latest.get("matches_won") or 0) + int(latest.get("matches_lost") or 0)
+        # Approximation grossière de la fatigue
+        stats["fatigue_score"] = min(5, total_matches // 10)
 
     return stats
 
 
 async def fetch_h2h(player1_name: str, player2_name: str) -> dict:
-    """Récupère l'historique des confrontations directes entre deux joueurs."""
-    headers = {"x-apisports-key": APISPORTS_KEY}
+    """Récupère l'historique des confrontations directes via API-Tennis.com."""
+    key1 = await find_player_key(player1_name)
+    key2 = await find_player_key(player2_name)
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        id1 = await _get_player_id(session, player1_name)
-        id2 = await _get_player_id(session, player2_name)
+    if not key1 or not key2:
+        return {"p1_wins": 0, "p2_wins": 0, "total": 0}
 
-        if not id1 or not id2:
-            return {"p1_wins": 0, "p2_wins": 0, "total": 0}
+    async with aiohttp.ClientSession() as session:
+        data = await _api_tennis_request(session, {
+            "method": "get_H2H",
+            "first_player_key": key1,
+            "second_player_key": key2,
+        })
 
-        try:
-            async with session.get(
-                f"{APISPORTS_BASE}/h2h",
-                params={"h2h": f"{id1}-{id2}"},
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status != 200:
-                    return {"p1_wins": 0, "p2_wins": 0, "total": 0}
-                data = await resp.json()
-                games = data.get("response", [])
+    result = data.get("result", {})
+    h2h_matches = result.get("H2H", [])
 
-                p1_wins = sum(
-                    1 for g in games
-                    if g.get("winner", {}).get("id") == id1
-                )
-                return {
-                    "p1_wins": p1_wins,
-                    "p2_wins": len(games) - p1_wins,
-                    "total": len(games)
-                }
-        except aiohttp.ClientError as e:
-            logger.error(f"Erreur API-Sports H2H: {e}")
-            return {"p1_wins": 0, "p2_wins": 0, "total": 0}
+    if not h2h_matches:
+        return {"p1_wins": 0, "p2_wins": 0, "total": 0}
+
+    p1_wins = 0
+    p2_wins = 0
+
+    for match in h2h_matches:
+        winner = match.get("event_winner")
+        first_key = match.get("first_player_key")
+
+        if winner == "First Player":
+            if first_key == key1:
+                p1_wins += 1
+            else:
+                p2_wins += 1
+        elif winner == "Second Player":
+            if first_key == key1:
+                p2_wins += 1
+            else:
+                p1_wins += 1
+
+    total = p1_wins + p2_wins
+    logger.info(f"H2H {player1_name} vs {player2_name}: {p1_wins}-{p2_wins} ({total} matchs)")
+
+    return {
+        "p1_wins": p1_wins,
+        "p2_wins": p2_wins,
+        "total": total,
+    }
