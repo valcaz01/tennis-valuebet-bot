@@ -4,12 +4,19 @@ Moteur d'analyse : calcul des probabilités estimées et détection des value be
 
 import logging
 import math
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from typing import Optional
 from data_fetcher import Match, fetch_player_stats, fetch_h2h, get_average_odds
 from config import FACTOR_WEIGHTS, MIN_EDGE, KELLY_FRACTION, BANKROLL
 
 logger = logging.getLogger(__name__)
+
+# ── Filtres de sécurité ───────────────────────────────────────────────────────
+MAX_ODDS = 8.0          # Ignorer les cotes au-dessus (trop risqué, jamais fiable)
+MIN_ODDS = 1.10         # Ignorer les cotes en dessous (pas d'intérêt)
+MAX_EDGE = 0.50         # Edge max réaliste (50%) — au-delà c'est une erreur du modèle
+MIN_DATA_FACTORS = 2    # Nb minimum de facteurs non-neutres (≠ 0.5) pour valider
 
 
 @dataclass
@@ -58,24 +65,37 @@ def remove_margin(odds_dict: dict[str, float]) -> dict[str, float]:
 def score_ranking(stats1: dict, stats2: dict) -> float:
     """
     Score [0-1] pour le joueur 1 basé sur le ranking.
-    Plus le ranking est bas (meilleur), plus le score est élevé.
-    On utilise les points ATP si disponibles, sinon la position.
+    Utilise une échelle logarithmique pour mieux refléter les écarts.
+    Un joueur top 5 vs un joueur 50e → écart bien marqué.
     """
     r1 = stats1.get("ranking") or 999
     r2 = stats2.get("ranking") or 999
 
-    # Score basé sur les points ATP (plus fiable)
-    pts1 = stats1.get("ranking_points") or max(0, 2000 - r1 * 5)
-    pts2 = stats2.get("ranking_points") or max(0, 2000 - r2 * 5)
+    # Utiliser les points ATP si disponibles
+    pts1 = stats1.get("ranking_points") or 0
+    pts2 = stats2.get("ranking_points") or 0
 
-    total = pts1 + pts2
+    if pts1 > 0 and pts2 > 0:
+        # Échelle logarithmique pour amplifier les écarts
+        log_pts1 = math.log(pts1 + 1)
+        log_pts2 = math.log(pts2 + 1)
+        total = log_pts1 + log_pts2
+        if total == 0:
+            return 0.5
+        return log_pts1 / total
+
+    # Fallback sur le ranking (inversé : plus petit = meilleur)
+    # Utiliser l'inverse du ranking avec lissage
+    score1 = 1 / (r1 + 5)
+    score2 = 1 / (r2 + 5)
+    total = score1 + score2
     if total == 0:
         return 0.5
-    return pts1 / total
+    return score1 / total
 
 
 def score_recent_form(stats1: dict, stats2: dict) -> float:
-    """Score basé sur le win rate des 5 derniers matchs."""
+    """Score basé sur le win rate des derniers matchs."""
     form1 = stats1.get("recent_form", [])
     form2 = stats2.get("recent_form", [])
 
@@ -115,7 +135,6 @@ def score_fatigue(stats1: dict, stats2: dict) -> float:
     """Score inversement proportionnel au nombre de matchs récents."""
     fat1 = stats1.get("fatigue_score", 0)
     fat2 = stats2.get("fatigue_score", 0)
-    # Plus de matchs récents = plus fatigué = score plus bas
     score1 = max(0, 1 - fat1 * 0.15)
     score2 = max(0, 1 - fat2 * 0.15)
     total = score1 + score2
@@ -153,10 +172,7 @@ def estimate_probability(
 
 
 def calculate_edge(p_estimated: float, odds: float) -> float:
-    """
-    Edge = valeur espérée − 1
-    Positif → value bet, négatif → pari désavantageux
-    """
+    """Edge = valeur espérée − 1"""
     return (p_estimated * odds) - 1
 
 
@@ -164,16 +180,31 @@ def kelly_stake(p_estimated: float, odds: float) -> float:
     """
     Fraction Kelly = (p × cote − 1) / (cote − 1)
     Applique KELLY_FRACTION pour réduire la volatilité.
-    Retourne la mise en € sur la BANKROLL configurée.
     """
     if odds <= 1:
         return 0
     f = (p_estimated * odds - 1) / (odds - 1)
-    f = max(0, f)  # Jamais négatif
+    f = max(0, f)
     return round(f * KELLY_FRACTION * BANKROLL, 2)
 
 
-# ── Détection des value bets ──────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def is_today(commence_time: str) -> bool:
+    """Vérifie si un match est prévu aujourd'hui (UTC)."""
+    try:
+        dt = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        return dt.date() == now.date()
+    except Exception:
+        return True  # En cas de doute, on garde le match
+
+
+def has_enough_data(factors: dict) -> bool:
+    """Vérifie qu'on a assez de données pour faire confiance au modèle."""
+    non_neutral = sum(1 for v in factors.values() if abs(v - 0.5) > 0.02)
+    return non_neutral >= MIN_DATA_FACTORS
+
 
 def get_surface_from_tournament(tournament_name: str) -> str:
     """Déduit la surface à partir du nom du tournoi."""
@@ -183,9 +214,10 @@ def get_surface_from_tournament(tournament_name: str) -> str:
         return "clay"
     if any(t in name for t in ["wimbledon", "grass", "queens", "halle"]):
         return "grass"
-    # Par défaut : dur (indoor ou outdoor hard)
     return "hard"
 
+
+# ── Détection des value bets ──────────────────────────────────────────────────
 
 async def analyze_match(match: Match) -> list[ValueBet]:
     """
@@ -193,6 +225,10 @@ async def analyze_match(match: Match) -> list[ValueBet]:
     Retourne la liste des value bets détectés (0, 1 ou 2 joueurs).
     """
     value_bets: list[ValueBet] = []
+
+    # ── Filtre 1 : uniquement les matchs du jour ──
+    if not is_today(match.commence_time):
+        return []
 
     if not match.odds:
         logger.debug(f"Pas de cotes pour {match.player1} vs {match.player2}")
@@ -224,15 +260,25 @@ async def analyze_match(match: Match) -> list[ValueBet]:
     p_est1, factors = estimate_probability(stats1, stats2, h2h, surface)
     p_est2 = 1 - p_est1
 
+    # ── Filtre 2 : vérifier qu'on a assez de données ──
+    if not has_enough_data(factors):
+        logger.info(f"Pas assez de données pour {match.player1} vs {match.player2}, skip")
+        return []
+
     # Calcul des edges
     for player, p_est, p_implied, odds in [
         (match.player1, p_est1, p_implied1,       odds1),
         (match.player2, p_est2, 1 - p_implied1,   odds2),
     ]:
+        # ── Filtre 3 : cotes dans une plage raisonnable ──
+        if odds > MAX_ODDS or odds < MIN_ODDS:
+            continue
+
         opponent = match.player2 if player == match.player1 else match.player1
         edge = calculate_edge(p_est, odds)
 
-        if edge >= MIN_EDGE:
+        # ── Filtre 4 : edge réaliste ──
+        if edge >= MIN_EDGE and edge <= MAX_EDGE:
             stake = kelly_stake(p_est, odds)
             value_bets.append(ValueBet(
                 match=match,
