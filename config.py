@@ -79,8 +79,11 @@ TENNIS_SPORTS = [
     "tennis_wta",
 ]
 
-# Région bookmakers (uk, eu, us, au)
-ODDS_REGIONS = "eu"
+# Région bookmakers (eu,uk pour avoir les bookmakers FR)
+ODDS_REGIONS = "eu,uk"
 
-# Bookmakers de référence pour la démarginisation
-REFERENCE_BOOKMAKERS = ["bet365", "unibet", "betclic", "winamax", "pinnacle"]
+# Bookmakers français pour les recommandations
+FR_BOOKMAKERS = ["betclic_fr", "winamax_fr", "unibet_fr", "pmu_fr"]
+
+# Bookmakers de référence pour la démarginisation (les plus fiables)
+REFERENCE_BOOKMAKERS = ["pinnacle", "betclic_fr", "winamax_fr", "unibet_fr", "betfair_ex_eu"]

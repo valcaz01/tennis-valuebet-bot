@@ -28,9 +28,16 @@ from surface_speed import get_tournament_speed
 
 logger = logging.getLogger(__name__)
 
-# Bookmakers français à privilégier
-FR_BOOKMAKERS = ["betclic", "winamax", "unibet", "unibet_eu", "pmu", "zebet",
-                 "france_pari", "parionssport"]
+# Bookmakers français (clés exactes de The Odds API)
+FR_BOOKMAKERS = ["betclic_fr", "winamax_fr", "unibet_fr", "pmu_fr"]
+
+# Noms lisibles
+BM_DISPLAY_NAMES = {
+    "betclic_fr": "Betclic",
+    "winamax_fr": "Winamax",
+    "unibet_fr": "Unibet",
+    "pmu_fr": "PMU",
+}
 
 # Moyenne de jeux par match ATP (Bo3)
 AVG_GAMES_BO3 = 22.5
@@ -178,35 +185,40 @@ def analyze_totals(match: Match, surface: str) -> list[TotalsBet]:
 
     bets: list[TotalsBet] = []
 
-    # Chercher la meilleure cote pour chaque ligne, en privilégiant les bookmakers FR
-    all_lines = set()
-    for bm_data in match.totals_odds.values():
-        for line in bm_data:
-            all_lines.add(line)
+    # Ne garder que les lignes disponibles chez les bookmakers FR
+    fr_lines = set()
+    for bm, bm_data in match.totals_odds.items():
+        if bm in FR_BOOKMAKERS:
+            for line in bm_data:
+                fr_lines.add(line)
 
-    for line in all_lines:
+    # Si aucun bookmaker FR n'a de cotes totals, on skip
+    if not fr_lines:
+        return []
+
+    for line in fr_lines:
         p_over = prob_over(estimated, line)
         p_under = 1.0 - p_over
 
-        # Chercher la meilleure cote Over (bookmakers FR en priorité)
+        # Chercher la meilleure cote Over chez les bookmakers FR uniquement
         best_over_odds = None
         best_over_bm = None
-        for bm, bm_data in match.totals_odds.items():
+        for bm in FR_BOOKMAKERS:
+            bm_data = match.totals_odds.get(bm, {})
             if line in bm_data and "over" in bm_data[line]:
                 odds = bm_data[line]["over"]
-                is_fr = any(fr in bm.lower() for fr in FR_BOOKMAKERS)
-                if best_over_odds is None or odds > best_over_odds or (is_fr and odds >= (best_over_odds or 0) * 0.95):
+                if best_over_odds is None or odds > best_over_odds:
                     best_over_odds = odds
                     best_over_bm = bm
 
-        # Chercher la meilleure cote Under (bookmakers FR en priorité)
+        # Chercher la meilleure cote Under chez les bookmakers FR uniquement
         best_under_odds = None
         best_under_bm = None
-        for bm, bm_data in match.totals_odds.items():
+        for bm in FR_BOOKMAKERS:
+            bm_data = match.totals_odds.get(bm, {})
             if line in bm_data and "under" in bm_data[line]:
                 odds = bm_data[line]["under"]
-                is_fr = any(fr in bm.lower() for fr in FR_BOOKMAKERS)
-                if best_under_odds is None or odds > best_under_odds or (is_fr and odds >= (best_under_odds or 0) * 0.95):
+                if best_under_odds is None or odds > best_under_odds:
                     best_under_odds = odds
                     best_under_bm = bm
 
@@ -217,7 +229,8 @@ def analyze_totals(match: Match, surface: str) -> list[TotalsBet]:
                 confidence = "🔥 Forte" if edge_over >= 0.12 else ("✅ Bonne" if edge_over >= 0.06 else "⚠️ Modérée")
                 bets.append(TotalsBet(
                     match=match, side="over", line=line,
-                    best_odds=best_over_odds, bookmaker=best_over_bm,
+                    best_odds=best_over_odds,
+                    bookmaker=BM_DISPLAY_NAMES.get(best_over_bm, best_over_bm),
                     estimated_games=estimated, edge=edge_over,
                     confidence=confidence,
                 ))
@@ -228,7 +241,8 @@ def analyze_totals(match: Match, surface: str) -> list[TotalsBet]:
                 confidence = "🔥 Forte" if edge_under >= 0.12 else ("✅ Bonne" if edge_under >= 0.06 else "⚠️ Modérée")
                 bets.append(TotalsBet(
                     match=match, side="under", line=line,
-                    best_odds=best_under_odds, bookmaker=best_under_bm,
+                    best_odds=best_under_odds,
+                    bookmaker=BM_DISPLAY_NAMES.get(best_under_bm, best_under_bm),
                     estimated_games=estimated, edge=edge_under,
                     confidence=confidence,
                 ))
