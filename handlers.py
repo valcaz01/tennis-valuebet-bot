@@ -12,6 +12,7 @@ from data_fetcher import fetch_upcoming_matches
 from analyzer import scan_all_matches, is_today_or_tomorrow
 from totals_analyzer import analyze_totals, is_today_or_tomorrow as totals_filter
 from elo import get_player_withdrawals
+from tracker import record_bet, verify_results, get_stats
 from formatter import (
     fmt_valuebet_alert, fmt_scan_summary,
     fmt_match_list, fmt_status, escape,
@@ -43,6 +44,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("📋 Matchs",     callback_data="matches"),
+            InlineKeyboardButton("📊 Résultats",  callback_data="results"),
+        ],
+        [
             InlineKeyboardButton("❓ Aide",       callback_data="help"),
         ],
     ]
@@ -101,6 +105,16 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
         for vb in vbs:
+            # Enregistrer le bet pour le tracking
+            record_bet(
+                bet_type="ml", match_id=vb.match.id,
+                tournament=vb.match.tournament,
+                player=vb.player, opponent=vb.opponent,
+                odds=vb.best_odds, edge=vb.edge,
+                p_estimated=vb.p_estimated,
+                kelly_stake=vb.kelly_stake,
+                commence_time=vb.match.commence_time,
+            )
             p_wd = get_player_withdrawals(vb.player)
             o_wd = get_player_withdrawals(vb.opponent)
             await update.effective_message.reply_text(
@@ -195,6 +209,15 @@ async def cmd_totals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         # Envoyer les 5 meilleurs
         for tb in all_totals[:5]:
+            record_bet(
+                bet_type=tb.side, match_id=tb.match.id,
+                tournament=tb.match.tournament,
+                player=tb.match.player1, opponent=tb.match.player2,
+                odds=tb.best_odds, edge=tb.edge,
+                p_estimated=0, kelly_stake=0,
+                commence_time=tb.match.commence_time,
+                side=tb.side, line=tb.line,
+            )
             await update.effective_message.reply_text(
                 fmt_totals_alert(tb),
                 parse_mode=ParseMode.MARKDOWN_V2
@@ -202,6 +225,62 @@ async def cmd_totals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.exception("Erreur lors du scan totals")
+        await msg.edit_text(f"❌ Erreur : {escape(str(e))}", parse_mode=ParseMode.MARKDOWN_V2)
+
+
+async def cmd_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Affiche les performances du bot."""
+    if not is_authorized(update):
+        return
+
+    msg = await update.effective_message.reply_text(
+        "⏳ Vérification des résultats\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+    try:
+        # Vérifier les résultats en attente
+        verified = await verify_results()
+
+        # Calculer les stats
+        stats_30d = get_stats(days=30)
+        stats_all = get_stats(days=0)
+
+        def fmt_section(label, s):
+            if s["count"] == 0:
+                return f"*{label}* : aucun pari vérifié"
+            emoji = "🟢" if s["profit"] > 0 else ("🔴" if s["profit"] < 0 else "⚪")
+            return (
+                f"*{label}*\n"
+                f"├ Paris : `{s['count']}` \\({s['won']}W \\- {s['lost']}L\\)\n"
+                f"├ Win rate : `{s['win_rate']*100:.0f}%`\n"
+                f"├ Profit : {emoji} `{s['profit']:+.1f}u`\n"
+                f"└ ROI : `{s['roi']:+.1f}%`"
+            )
+
+        lines = [
+            f"📊 *Performances du bot*",
+            f"",
+            f"_Résultats vérifiés : {verified} nouveau\\(x\\)_",
+            f"_En attente : {stats_all['pending']} pari\\(s\\)_",
+            f"",
+            f"📅 *30 derniers jours*",
+            fmt_section("Match Winner", stats_30d["ml"]),
+            f"",
+            fmt_section("Over/Under", stats_30d["totals"]),
+            f"",
+            fmt_section("Global", stats_30d["all"]),
+            f"",
+            f"📈 *Depuis le début*",
+            fmt_section("Global", stats_all["all"]),
+        ]
+
+        await msg.edit_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+    except Exception as e:
+        logger.exception("Erreur résultats")
         await msg.edit_text(f"❌ Erreur : {escape(str(e))}", parse_mode=ParseMode.MARKDOWN_V2)
 
 
@@ -217,6 +296,8 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_matches(update, ctx)
     elif action == "totals":
         await cmd_totals(update, ctx)
+    elif action == "results":
+        await cmd_results(update, ctx)
     elif action == "status":
         await cmd_status(update, ctx)
     elif action == "help":

@@ -44,6 +44,12 @@ async def run_scan(app):
     logger.info(f"[Scheduler] Démarrage scan automatique — {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
 
     try:
+        # Vérifier les résultats des bets précédents
+        from tracker import verify_results, record_bet
+        verified = await verify_results()
+        if verified:
+            logger.info(f"[Scheduler] {verified} résultat(s) vérifié(s)")
+
         matches = await fetch_upcoming_matches()
         vbs = await scan_all_matches(matches)
 
@@ -52,12 +58,10 @@ async def run_scan(app):
             return
 
         sent_ids = load_sent_ids()
-        # Déterminer les chats à notifier
         chat_ids = ALLOWED_CHAT_IDS if ALLOWED_CHAT_IDS else []
 
         if not chat_ids:
-            logger.warning("[Scheduler] Aucun chat_id configuré dans ALLOWED_CHAT_IDS. "
-                           "Ajoute ton chat_id dans config.py pour recevoir les alertes automatiques.")
+            logger.warning("[Scheduler] Aucun chat_id configuré dans ALLOWED_CHAT_IDS.")
             return
 
         new_count = 0
@@ -67,7 +71,17 @@ async def run_scan(app):
                 logger.debug(f"[Scheduler] Déjà envoyé : {vb.player}")
                 continue
 
-            # Importer ici pour éviter la circularité
+            # Enregistrer le bet
+            record_bet(
+                bet_type="ml", match_id=vb.match.id,
+                tournament=vb.match.tournament,
+                player=vb.player, opponent=vb.opponent,
+                odds=vb.best_odds, edge=vb.edge,
+                p_estimated=vb.p_estimated,
+                kelly_stake=vb.kelly_stake,
+                commence_time=vb.match.commence_time,
+            )
+
             from handlers import send_valuebet_alert
             for chat_id in chat_ids:
                 await send_valuebet_alert(app, chat_id, vb)
