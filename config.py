@@ -87,4 +87,4 @@ TENNIS_SPORTS = [
 ODDS_REGIONS = "eu"
 
 # Bookmakers de référence pour la démarginisation
-REFERENCE_BOOKMAKERS = ["bet365", "unibet", "betclic", "winamax", "pinnacle"]
+REFERENCE_BOOKMAKERS = ["unibet", "betclic", "winamax"]
