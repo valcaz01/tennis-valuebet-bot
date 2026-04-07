@@ -1,6 +1,6 @@
 """
-Moteur d'analyse : calcul des probabilités estimées et détection des value bets
-Intègre Elo + contexte tournoi + surface dynamique pondérée.
+Moteur d'analyse — 6 facteurs optimisés
+Elo surface, Performance, Forme, Marché, H2H, Contexte
 """
 
 import logging
@@ -11,7 +11,7 @@ from typing import Optional
 from data_fetcher import Match, fetch_player_stats, fetch_h2h, get_average_odds
 from elo import (
     get_elo_by_name, elo_win_probability, DEFAULT_ELO,
-    get_weighted_surface_winrate, get_weighted_perf_stats
+    get_weighted_perf_stats
 )
 from context import compute_context_score
 from surface_speed import compute_speed_factor
@@ -62,13 +62,19 @@ def remove_margin(odds_dict: dict[str, float]) -> dict[str, float]:
     return {player: p / total for player, p in raw_probs.items()}
 
 
-# ── Scoring des facteurs ──────────────────────────────────────────────────────
+# ── Les 6 facteurs ────────────────────────────────────────────────────────────
 
 def score_elo(player1_name: str, player2_name: str, surface: str) -> float:
+    """
+    Facteur 1 — Elo par surface (30%)
+    Le plus prédictif : intègre force du joueur + qualité des adversaires + surface.
+    Utilise le Elo surface, fallback sur Elo global.
+    """
     elo1 = get_elo_by_name(player1_name)
     elo2 = get_elo_by_name(player2_name)
     if not elo1 or not elo2:
         return 0.5
+
     surface_lower = surface.lower()
     if surface_lower == "clay":
         e1, e2 = elo1.elo_clay, elo2.elo_clay
@@ -76,32 +82,46 @@ def score_elo(player1_name: str, player2_name: str, surface: str) -> float:
         e1, e2 = elo1.elo_grass, elo2.elo_grass
     else:
         e1, e2 = elo1.elo_hard, elo2.elo_hard
+
+    # Fallback sur global si pas assez de matchs sur cette surface
     if abs(e1 - DEFAULT_ELO) < 10 or abs(e2 - DEFAULT_ELO) < 10:
         e1, e2 = elo1.elo_global, elo2.elo_global
+
     return elo_win_probability(e1, e2)
 
 
-def score_ranking(stats1: dict, stats2: dict) -> float:
-    pts1 = stats1.get("ranking_points") or 0
-    pts2 = stats2.get("ranking_points") or 0
-    if pts1 > 0 and pts2 > 0:
-        log_pts1 = math.log(pts1 + 1)
-        log_pts2 = math.log(pts2 + 1)
-        total = log_pts1 + log_pts2
-        if total == 0:
-            return 0.5
-        return log_pts1 / total
-    r1 = stats1.get("ranking") or 999
-    r2 = stats2.get("ranking") or 999
-    score1 = 1 / (r1 + 5)
-    score2 = 1 / (r2 + 5)
-    total = score1 + score2
+def score_performance(player1_name: str, player2_name: str) -> float:
+    """
+    Facteur 2 — Performance stats (20%)
+    Service, retour, break points — les métriques de jeu concrètes.
+    """
+    perf1 = get_weighted_perf_stats(player1_name)
+    perf2 = get_weighted_perf_stats(player2_name)
+
+    if not perf1 or not perf2:
+        return 0.5
+
+    def composite(p):
+        spw = p.get("service_points_won_pct") or 0.63
+        rpw = p.get("return_points_won_pct") or 0.37
+        bps = p.get("bp_saved_pct") or 0.62
+        bpc = p.get("bp_converted_pct") or 0.42
+        return spw * 0.35 + rpw * 0.35 + bps * 0.15 + bpc * 0.15
+
+    c1 = composite(perf1)
+    c2 = composite(perf2)
+
+    total = c1 + c2
     if total == 0:
         return 0.5
-    return score1 / total
+    return c1 / total
 
 
 def score_recent_form(stats1: dict, stats2: dict) -> float:
+    """
+    Facteur 3 — Forme récente (15%)
+    Capte la dynamique court terme qu'Elo et les stats ne voient pas encore.
+    """
     form1 = stats1.get("recent_form", [])
     form2 = stats2.get("recent_form", [])
     rate1 = sum(form1) / len(form1) if form1 else 0.5
@@ -112,38 +132,12 @@ def score_recent_form(stats1: dict, stats2: dict) -> float:
     return rate1 / total
 
 
-def score_surface(player1_name: str, player2_name: str,
-                  stats1: dict, stats2: dict, surface: str) -> float:
-    """
-    Score surface dynamique avec pondération récente.
-    Utilise d'abord le win rate pondéré des 90 derniers jours (elo module).
-    Fallback sur les stats API-Tennis si pas assez de données récentes.
-    """
-    # Essayer le win rate pondéré récent (depuis le module elo)
-    elo1 = get_elo_by_name(player1_name)
-    elo2 = get_elo_by_name(player2_name)
-
-    wr1 = None
-    wr2 = None
-
-    if elo1:
-        wr1 = get_weighted_surface_winrate(elo1.player_key, surface)
-    if elo2:
-        wr2 = get_weighted_surface_winrate(elo2.player_key, surface)
-
-    # Fallback sur les stats API-Tennis si pas de données récentes
-    if wr1 is None:
-        wr1 = stats1.get("surface_win_rates", {}).get(surface.lower(), 0.5)
-    if wr2 is None:
-        wr2 = stats2.get("surface_win_rates", {}).get(surface.lower(), 0.5)
-
-    total = wr1 + wr2
-    if total == 0:
-        return 0.5
-    return wr1 / total
-
-
 def score_h2h(h2h: dict) -> float:
+    """
+    Facteur 5 — H2H (10%)
+    Signal fort quand il y a assez d'historique (3+ matchs).
+    Lissage bayésien pour éviter les extrêmes.
+    """
     total = h2h.get("total", 0)
     if total < 3:
         return 0.5
@@ -151,49 +145,38 @@ def score_h2h(h2h: dict) -> float:
     return (p1_wins + 1) / (total + 2)
 
 
-def score_fatigue(stats1: dict, stats2: dict) -> float:
-    fat1 = stats1.get("fatigue_score", 0)
-    fat2 = stats2.get("fatigue_score", 0)
-    score1 = max(0, 1 - fat1 * 0.15)
-    score2 = max(0, 1 - fat2 * 0.15)
-    total = score1 + score2
-    if total == 0:
-        return 0.5
-    return score1 / total
-
-
-def score_performance(player1_name: str, player2_name: str) -> float:
+def score_context(
+    player1_name: str, player2_name: str,
+    stats1: dict, stats2: dict,
+    tournament_name: str, surface: str
+) -> float:
     """
-    Score [0-1] basé sur les stats de performance pondérées :
-    - % points gagnés au service (hold strength)
-    - % points gagnés au retour (break potential)
-    - % break points sauvés (mental au service)
-    - % break points convertis (clutch au retour)
-    
-    On combine ces 4 métriques en un score composite.
+    Facteur 6 — Contexte (10%)
+    Combine : niveau du tournoi, avantage local, vitesse de surface.
     """
+    # Score contexte tournoi (niveau + avantage local + points à défendre)
+    ctx = compute_context_score(
+        player1_name, player2_name,
+        stats1.get("country", ""), stats2.get("country", ""),
+        stats1, stats2,
+        tournament_name,
+        stats1.get("ranking") or 999,
+        stats2.get("ranking") or 999,
+    )
+
+    # Score vitesse de surface (serveur vs défenseur)
     perf1 = get_weighted_perf_stats(player1_name)
     perf2 = get_weighted_perf_stats(player2_name)
+    speed = compute_speed_factor(
+        player1_name, player2_name,
+        perf1 or {}, perf2 or {},
+        tournament_name, surface
+    )
 
-    if not perf1 or not perf2:
-        return 0.5
+    # Moyenne pondérée : 60% contexte tournoi, 40% vitesse surface
+    combined = ctx * 0.6 + speed * 0.4
 
-    # Calculer un score composite pour chaque joueur
-    # Pondération : service 35%, retour 35%, BP saved 15%, BP converted 15%
-    def composite(p):
-        spw = p.get("service_points_won_pct") or 0.6  # moyenne ATP ~63%
-        rpw = p.get("return_points_won_pct") or 0.35   # moyenne ATP ~37%
-        bps = p.get("bp_saved_pct") or 0.6              # moyenne ATP ~62%
-        bpc = p.get("bp_converted_pct") or 0.4          # moyenne ATP ~42%
-        return spw * 0.35 + rpw * 0.35 + bps * 0.15 + bpc * 0.15
-
-    c1 = composite(perf1)
-    c2 = composite(perf2)
-
-    total = c1 + c2
-    if total == 0:
-        return 0.5
-    return c1 / total
+    return combined
 
 
 # ── Modèle principal ──────────────────────────────────────────────────────────
@@ -207,40 +190,18 @@ def estimate_probability(
 ) -> tuple[float, dict]:
     """
     Calcule la probabilité estimée que le joueur 1 gagne.
-    9 facteurs pondérés incluant Elo, performance, contexte et marché.
+    6 facteurs clairs, chacun avec un poids significatif.
     """
     w = FACTOR_WEIGHTS
 
-    ctx_score = compute_context_score(
-        player1_name, player2_name,
-        stats1.get("country", ""), stats2.get("country", ""),
-        stats1, stats2,
-        tournament_name,
-        stats1.get("ranking") or 999,
-        stats2.get("ranking") or 999,
-    )
-
-    # Stats de performance pour le calcul de vitesse
-    perf1 = get_weighted_perf_stats(player1_name)
-    perf2 = get_weighted_perf_stats(player2_name)
-
-    speed_score = compute_speed_factor(
-        player1_name, player2_name,
-        perf1 or {}, perf2 or {},
-        tournament_name, surface
-    )
-
     factors = {
         "elo":          score_elo(player1_name, player2_name, surface),
-        "ranking":      score_ranking(stats1, stats2),
-        "recent_form":  score_recent_form(stats1, stats2),
-        "surface":      score_surface(player1_name, player2_name, stats1, stats2, surface),
-        "speed_fit":    speed_score,
-        "h2h":          score_h2h(h2h),
-        "fatigue":      score_fatigue(stats1, stats2),
-        "context":      ctx_score,
         "performance":  score_performance(player1_name, player2_name),
+        "form":         score_recent_form(stats1, stats2),
         "market":       p_market,
+        "h2h":          score_h2h(h2h),
+        "context":      score_context(player1_name, player2_name,
+                                      stats1, stats2, tournament_name, surface),
     }
 
     p_est = sum(factors[k] * w.get(k, 0) for k in factors)

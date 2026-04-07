@@ -36,7 +36,7 @@ def fmt_valuebet_alert(vb: ValueBet, player_withdrawals: dict = None,
         f"📈 *Facteurs*",
     ] + _fmt_factors(vb.factors)
 
-    # ── Section retraits ──
+    # Section retraits
     withdrawal_lines = _fmt_withdrawals(vb.player, player_withdrawals,
                                          vb.opponent, opponent_withdrawals)
     if withdrawal_lines:
@@ -79,7 +79,7 @@ def fmt_scan_summary(vbs: list[ValueBet], matches_count: int) -> str:
 def fmt_match_list(matches: list[Match]) -> str:
     """Liste des matchs récupérés."""
     if not matches:
-        return "Aucun match à venir trouvé\\."
+        return "Aucun match du jour trouvé\\."
 
     lines = [f"📋 *{len(matches)} matchs du jour*\n"]
     for m in matches[:15]:
@@ -131,18 +131,14 @@ def _edge_bar(edge: float) -> str:
 
 
 def _fmt_factors(factors: dict) -> list[str]:
-    """Affiche le détail des facteurs sous forme de mini-barres."""
+    """Affiche le détail des facteurs."""
     labels = {
-        "elo":          "Elo",
-        "ranking":      "Ranking",
-        "recent_form":  "Forme récente",
-        "surface":      "Surface",
-        "speed_fit":    "Vitesse surface",
-        "h2h":          "H2H",
-        "fatigue":      "Fraîcheur",
-        "context":      "Contexte",
+        "elo":          "Elo surface",
         "performance":  "Performance",
+        "form":         "Forme récente",
         "market":       "Marché",
+        "h2h":          "H2H",
+        "context":      "Contexte",
     }
     lines = []
     items = list(factors.items())

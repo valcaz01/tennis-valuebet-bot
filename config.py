@@ -35,18 +35,14 @@ KELLY_FRACTION  = float(os.getenv("KELLY_FRACTION", "0.25"))
 BANKROLL        = float(os.getenv("BANKROLL", "1000"))
 
 # ── Poids des facteurs d'analyse ────────────────────────────
-# Total doit faire 1.0
+# 6 facteurs, total = 1.0
 FACTOR_WEIGHTS = {
-    "elo":          0.23,   # Rating Elo par surface (facteur principal)
-    "performance":  0.15,   # Stats de perf (service, retour, BP)
-    "recent_form":  0.12,   # Victoires sur les derniers matchs
-    "market":       0.10,   # Probabilité implicite du marché (ancrage)
-    "surface":      0.08,   # Win rate dynamique sur la surface
-    "speed_fit":    0.07,   # Compatibilité joueur/vitesse de surface
-    "context":      0.07,   # Contexte tournoi (niveau, avantage local)
-    "h2h":          0.07,   # Historique des confrontations directes
-    "ranking":      0.06,   # Position ATP/WTA officielle
-    "fatigue":      0.05,   # Nombre de matchs joués récemment
+    "elo":          0.30,   # Elo par surface — force réelle ajustée
+    "performance":  0.20,   # Stats service/retour/BP pondérées
+    "form":         0.15,   # Forme récente (dynamique court terme)
+    "market":       0.15,   # Probabilité implicite du marché (ancrage)
+    "h2h":          0.10,   # Confrontations directes (3+ matchs requis)
+    "context":      0.10,   # Contexte tournoi + vitesse surface + avantage local
 }
 
 # ── Scheduler ───────────────────────────────────────────────
@@ -54,7 +50,6 @@ FACTOR_WEIGHTS = {
 SCAN_INTERVAL_MINUTES = int(os.getenv("SCAN_INTERVAL", "30"))
 
 # ── Tournois à couvrir (The Odds API) ───────────────────────
-# Clés The Odds API — les matchs sont récupérés ici
 TENNIS_SPORTS = [
     "tennis_atp_french_open",
     "tennis_wta_french_open",
