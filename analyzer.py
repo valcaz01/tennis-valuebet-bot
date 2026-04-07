@@ -1,6 +1,6 @@
 """
 Moteur d'analyse : calcul des probabilités estimées et détection des value bets
-Intègre le rating Elo comme facteur principal.
+Intègre le rating Elo + contexte tournoi comme facteurs.
 """
 
 import logging
@@ -9,21 +9,21 @@ from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from typing import Optional
 from data_fetcher import Match, fetch_player_stats, fetch_h2h, get_average_odds
-from elo import get_elo_by_name, elo_win_probability, get_surface_elo, DEFAULT_ELO
+from elo import get_elo_by_name, elo_win_probability, DEFAULT_ELO
+from context import compute_context_score
 from config import FACTOR_WEIGHTS, MIN_EDGE, KELLY_FRACTION, BANKROLL
 
 logger = logging.getLogger(__name__)
 
 # ── Filtres de sécurité ───────────────────────────────────────────────────────
-MAX_ODDS = 5.0          # Ignorer les cotes au-dessus (trop risqué)
-MIN_ODDS = 1.20         # Ignorer les cotes en dessous (pas d'intérêt)
-MAX_EDGE = 0.25         # Edge max réaliste (25%) — au-delà c'est probablement une erreur
-MIN_DATA_FACTORS = 2    # Nb minimum de facteurs non-neutres (≠ 0.5) pour valider
+MAX_ODDS = 5.0
+MIN_ODDS = 1.20
+MAX_EDGE = 0.25
+MIN_DATA_FACTORS = 2
 
 
 @dataclass
 class ValueBet:
-    """Résultat d'une analyse : un value bet détecté"""
     match: Match
     player: str
     opponent: str
@@ -61,17 +61,10 @@ def remove_margin(odds_dict: dict[str, float]) -> dict[str, float]:
 # ── Scoring des facteurs ──────────────────────────────────────────────────────
 
 def score_elo(player1_name: str, player2_name: str, surface: str) -> float:
-    """
-    Score [0-1] basé sur le Elo par surface.
-    C'est le facteur le plus fiable car il intègre la force de l'adversaire.
-    """
     elo1 = get_elo_by_name(player1_name)
     elo2 = get_elo_by_name(player2_name)
-
     if not elo1 or not elo2:
-        return 0.5  # Pas de données → neutre
-
-    # Utiliser le Elo surface si disponible, sinon global
+        return 0.5
     surface_lower = surface.lower()
     if surface_lower == "clay":
         e1, e2 = elo1.elo_clay, elo2.elo_clay
@@ -79,23 +72,14 @@ def score_elo(player1_name: str, player2_name: str, surface: str) -> float:
         e1, e2 = elo1.elo_grass, elo2.elo_grass
     else:
         e1, e2 = elo1.elo_hard, elo2.elo_hard
-
-    # Si le Elo surface est encore à la valeur par défaut, utiliser le global
     if abs(e1 - DEFAULT_ELO) < 10 or abs(e2 - DEFAULT_ELO) < 10:
         e1, e2 = elo1.elo_global, elo2.elo_global
-
-    # Probabilité Elo brute
     return elo_win_probability(e1, e2)
 
 
 def score_ranking(stats1: dict, stats2: dict) -> float:
-    """Score [0-1] basé sur le ranking ATP/WTA (échelle logarithmique)."""
-    r1 = stats1.get("ranking") or 999
-    r2 = stats2.get("ranking") or 999
-
     pts1 = stats1.get("ranking_points") or 0
     pts2 = stats2.get("ranking_points") or 0
-
     if pts1 > 0 and pts2 > 0:
         log_pts1 = math.log(pts1 + 1)
         log_pts2 = math.log(pts2 + 1)
@@ -103,7 +87,8 @@ def score_ranking(stats1: dict, stats2: dict) -> float:
         if total == 0:
             return 0.5
         return log_pts1 / total
-
+    r1 = stats1.get("ranking") or 999
+    r2 = stats2.get("ranking") or 999
     score1 = 1 / (r1 + 5)
     score2 = 1 / (r2 + 5)
     total = score1 + score2
@@ -157,13 +142,23 @@ def score_fatigue(stats1: dict, stats2: dict) -> float:
 def estimate_probability(
     stats1: dict, stats2: dict,
     h2h: dict, surface: str,
-    player1_name: str, player2_name: str
+    player1_name: str, player2_name: str,
+    tournament_name: str
 ) -> tuple[float, dict]:
     """
     Calcule la probabilité estimée que le joueur 1 gagne.
-    Le Elo est maintenant le facteur le plus important.
+    7 facteurs pondérés incluant Elo et contexte tournoi.
     """
     w = FACTOR_WEIGHTS
+
+    ctx_score = compute_context_score(
+        player1_name, player2_name,
+        stats1.get("country", ""), stats2.get("country", ""),
+        stats1, stats2,
+        tournament_name,
+        stats1.get("ranking") or 999,
+        stats2.get("ranking") or 999,
+    )
 
     factors = {
         "elo":          score_elo(player1_name, player2_name, surface),
@@ -172,11 +167,10 @@ def estimate_probability(
         "surface":      score_surface(stats1, stats2, surface),
         "h2h":          score_h2h(h2h),
         "fatigue":      score_fatigue(stats1, stats2),
+        "context":      ctx_score,
     }
 
     p_est = sum(factors[k] * w.get(k, 0) for k in factors)
-
-    # Clamp entre 5% et 95%
     p_est = max(0.05, min(0.95, p_est))
 
     return p_est, factors
@@ -251,10 +245,10 @@ async def analyze_match(match: Match) -> list[ValueBet]:
     implied = remove_margin({match.player1: odds1, match.player2: odds2})
     p_implied1 = implied[match.player1]
 
-    # Probabilité estimée avec le Elo
     p_est1, factors = estimate_probability(
         stats1, stats2, h2h, surface,
-        match.player1, match.player2
+        match.player1, match.player2,
+        match.tournament
     )
     p_est2 = 1 - p_est1
 

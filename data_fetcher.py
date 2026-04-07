@@ -208,6 +208,7 @@ async def fetch_player_stats(player_name: str) -> dict:
     stats = {
         "ranking": None,
         "ranking_points": None,
+        "country": "",
         "recent_form": [],
         "surface_win_rates": {},
         "fatigue_score": 0,
@@ -243,6 +244,7 @@ async def fetch_player_stats(player_name: str) -> dict:
 
     player_data = results[0]
     player_stats = player_data.get("stats", [])
+    stats["country"] = player_data.get("player_country", "")
 
     # Trouver les stats singles de la saison en cours et précédente
     current_year = "2026"

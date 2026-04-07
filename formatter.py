@@ -71,8 +71,8 @@ def fmt_match_list(matches: list[Match]) -> str:
     if not matches:
         return "Aucun match à venir trouvé\\."
 
-    lines = [f"📋 *{len(matches)} matchs à venir*\n"]
-    for m in matches[:15]:  # Limiter à 15 pour éviter les messages trop longs
+    lines = [f"📋 *{len(matches)} matchs du jour*\n"]
+    for m in matches[:15]:
         dt = datetime.fromisoformat(m.commence_time.replace("Z", "+00:00"))
         time_str = dt.strftime("%d/%m %H:%M")
         bms = len(m.odds)
@@ -129,6 +129,7 @@ def _fmt_factors(factors: dict) -> list[str]:
         "surface":     "Surface",
         "h2h":         "H2H",
         "fatigue":     "Fraîcheur",
+        "context":     "Contexte",
     }
     lines = []
     items = list(factors.items())
