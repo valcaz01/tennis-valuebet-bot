@@ -5,7 +5,7 @@ Elo surface, Performance, Forme, Marché, H2H, Contexte
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from typing import Optional
 from data_fetcher import Match, fetch_player_stats, fetch_h2h, get_average_odds
@@ -233,6 +233,20 @@ def is_today(commence_time: str) -> bool:
         return True
 
 
+def is_tomorrow(commence_time: str) -> bool:
+    try:
+        dt = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        tomorrow = (now + timedelta(days=1)).date()
+        return dt.date() == tomorrow
+    except Exception:
+        return False
+
+
+def is_today_or_tomorrow(commence_time: str) -> bool:
+    return is_today(commence_time) or is_tomorrow(commence_time)
+
+
 def has_enough_data(factors: dict) -> bool:
     non_neutral = sum(1 for v in factors.values() if abs(v - 0.5) > 0.02)
     return non_neutral >= MIN_DATA_FACTORS
@@ -253,7 +267,7 @@ def get_surface_from_tournament(tournament_name: str) -> str:
 async def analyze_match(match: Match) -> list[ValueBet]:
     value_bets: list[ValueBet] = []
 
-    if not is_today(match.commence_time):
+    if not is_today_or_tomorrow(match.commence_time):
         return []
 
     if not match.odds:

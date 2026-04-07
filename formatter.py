@@ -2,9 +2,20 @@
 Formatage des messages Telegram (Markdown v2)
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from analyzer import ValueBet
 from data_fetcher import Match
+
+
+def _is_tomorrow(commence_time: str) -> bool:
+    """Vérifie si un match est demain."""
+    try:
+        dt = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        tomorrow = (now + timedelta(days=1)).date()
+        return dt.date() == tomorrow
+    except Exception:
+        return False
 
 
 def fmt_valuebet_alert(vb: ValueBet, player_withdrawals: dict = None,
@@ -12,11 +23,12 @@ def fmt_valuebet_alert(vb: ValueBet, player_withdrawals: dict = None,
     """Message d'alerte pour un value bet détecté."""
     dt = datetime.fromisoformat(vb.match.commence_time.replace("Z", "+00:00"))
     match_time = dt.strftime("%d/%m %H:%M UTC")
+    tomorrow_badge = " ⏰ _DEMAIN_" if _is_tomorrow(vb.match.commence_time) else ""
 
     bar = _edge_bar(vb.edge)
 
     lines = [
-        f"🎾 *VALUE BET DÉTECTÉ*",
+        f"🎾 *VALUE BET DÉTECTÉ*{tomorrow_badge}",
         f"",
         f"🏆 {escape(vb.match.tournament)}",
         f"📅 {escape(match_time)}",
@@ -68,8 +80,9 @@ def fmt_scan_summary(vbs: list[ValueBet], matches_count: int) -> str:
         f"",
     ]
     for i, vb in enumerate(vbs, 1):
+        tomorrow = " ⏰" if _is_tomorrow(vb.match.commence_time) else ""
         lines.append(
-            f"{i}\\. {escape(vb.player)} vs {escape(vb.opponent)} "
+            f"{i}\\. {escape(vb.player)} vs {escape(vb.opponent)}{tomorrow} "
             f"— cote `{vb.best_odds:.2f}` — edge `{vb.edge_pct}`"
         )
 
@@ -79,20 +92,21 @@ def fmt_scan_summary(vbs: list[ValueBet], matches_count: int) -> str:
 def fmt_match_list(matches: list[Match]) -> str:
     """Liste des matchs récupérés."""
     if not matches:
-        return "Aucun match du jour trouvé\\."
+        return "Aucun match trouvé\\."
 
-    lines = [f"📋 *{len(matches)} matchs du jour*\n"]
-    for m in matches[:15]:
+    lines = [f"📋 *{len(matches)} matchs à venir*\n"]
+    for m in matches[:20]:
         dt = datetime.fromisoformat(m.commence_time.replace("Z", "+00:00"))
         time_str = dt.strftime("%d/%m %H:%M")
         bms = len(m.odds)
+        tomorrow = " ⏰" if _is_tomorrow(m.commence_time) else ""
         lines.append(
-            f"• {escape(m.player1)} vs {escape(m.player2)}\n"
+            f"• {escape(m.player1)} vs {escape(m.player2)}{tomorrow}\n"
             f"  {escape(time_str)} \\| {bms} bookmakers"
         )
 
-    if len(matches) > 15:
-        lines.append(f"\n_\\.\\.\\. et {len(matches) - 15} autres matchs_")
+    if len(matches) > 20:
+        lines.append(f"\n_\\.\\.\\. et {len(matches) - 20} autres matchs_")
 
     return "\n".join(lines)
 

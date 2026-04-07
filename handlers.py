@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from data_fetcher import fetch_upcoming_matches
-from analyzer import scan_all_matches, is_today
+from analyzer import scan_all_matches, is_today_or_tomorrow
 from elo import get_player_withdrawals
 from formatter import (
     fmt_valuebet_alert, fmt_scan_summary,
@@ -89,12 +89,12 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         matches = await fetch_upcoming_matches()
-        # Filtrer uniquement les matchs du jour
-        today_matches = [m for m in matches if is_today(m.commence_time)]
-        vbs = await scan_all_matches(today_matches)
+        # Filtrer les matchs du jour et de demain
+        upcoming_matches = [m for m in matches if is_today_or_tomorrow(m.commence_time)]
+        vbs = await scan_all_matches(upcoming_matches)
 
         await msg.edit_text(
-            fmt_scan_summary(vbs, len(today_matches)),
+            fmt_scan_summary(vbs, len(upcoming_matches)),
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
@@ -116,14 +116,14 @@ async def cmd_matches(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.effective_message.reply_text(
-        "⏳ Récupération des matchs du jour\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
+        "⏳ Récupération des matchs\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2
     )
     try:
         matches = await fetch_upcoming_matches()
-        # Filtrer uniquement les matchs du jour
-        today_matches = [m for m in matches if is_today(m.commence_time)]
+        # Filtrer les matchs du jour et de demain
+        upcoming_matches = [m for m in matches if is_today_or_tomorrow(m.commence_time)]
         await msg.edit_text(
-            fmt_match_list(today_matches), parse_mode=ParseMode.MARKDOWN_V2
+            fmt_match_list(upcoming_matches), parse_mode=ParseMode.MARKDOWN_V2
         )
     except Exception as e:
         logger.exception("Erreur récupération matchs")
