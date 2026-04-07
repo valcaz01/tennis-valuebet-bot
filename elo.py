@@ -1,36 +1,41 @@
 """
-Module Elo — Calcul des ratings Elo pour les joueurs ATP/WTA
+Module Elo — Calcul des ratings Elo + stats surface pondérées
 Charge les résultats jour par jour sur les derniers mois via API-Tennis.com.
 
-Formule Elo standard :
-  - Expected score : E = 1 / (1 + 10^((Rb - Ra) / 400))
-  - New rating : Ra' = Ra + K * (S - E)
+En plus du Elo, on track le win rate par surface avec pondération temporelle :
+les matchs récents pèsent plus que les anciens.
 """
 
 import logging
+import math
 import aiohttp
 from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from config import APITENNIS_KEY, APITENNIS_BASE
 
 logger = logging.getLogger(__name__)
 
-# ── Constantes Elo ────────────────────────────────────────────────────────────
+# ── Constantes ────────────────────────────────────────────────────────────────
 DEFAULT_ELO = 1500
 K_FACTOR = 32
 K_FACTOR_NEW = 48
 MATCHES_THRESHOLD = 30
 SURFACE_K_FACTOR = 40
-
-# Nombre de jours à charger pour construire le Elo
 DAYS_TO_LOAD = 90
 
 
 @dataclass
+class SurfaceResult:
+    """Un résultat de match sur une surface avec sa date."""
+    won: bool
+    days_ago: int  # Nombre de jours depuis le match
+
+
+@dataclass
 class PlayerElo:
-    """Ratings Elo d'un joueur."""
+    """Ratings Elo + historique surface d'un joueur."""
     name: str
     player_key: int
     elo_global: float = DEFAULT_ELO
@@ -38,6 +43,10 @@ class PlayerElo:
     elo_clay: float = DEFAULT_ELO
     elo_grass: float = DEFAULT_ELO
     matches_played: int = 0
+    # Historique des résultats par surface (pour win rate pondéré)
+    surface_results: dict = field(default_factory=lambda: {
+        "hard": [], "clay": [], "grass": []
+    })
 
 
 # Cache global
@@ -48,12 +57,10 @@ _elo_loaded: bool = False
 # ── Calcul Elo ────────────────────────────────────────────────────────────────
 
 def expected_score(rating_a: float, rating_b: float) -> float:
-    """Probabilité attendue que le joueur A batte le joueur B."""
     return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
 
 
 def update_elo(winner_elo: float, loser_elo: float, k: float) -> tuple[float, float]:
-    """Met à jour les ratings après un match."""
     e_winner = expected_score(winner_elo, loser_elo)
     new_winner = winner_elo + k * (1.0 - e_winner)
     new_loser = loser_elo + k * (0.0 - (1.0 - e_winner))
@@ -64,6 +71,46 @@ def get_k_factor(matches_played: int) -> float:
     if matches_played < MATCHES_THRESHOLD:
         return K_FACTOR_NEW
     return K_FACTOR
+
+
+# ── Win rate surface pondéré ──────────────────────────────────────────────────
+
+def get_weighted_surface_winrate(player_key: int, surface: str) -> Optional[float]:
+    """
+    Calcule le win rate pondéré sur une surface.
+    Les matchs récents pèsent plus grâce à un decay exponentiel.
+    
+    Pondération : weight = e^(-days_ago / 60)
+    → Un match d'hier a un poids de ~0.98
+    → Un match d'il y a 30 jours : ~0.61
+    → Un match d'il y a 60 jours : ~0.37
+    → Un match d'il y a 90 jours : ~0.22
+    """
+    elo = _elo_ratings.get(player_key)
+    if not elo:
+        return None
+
+    surface_lower = surface.lower()
+    results = elo.surface_results.get(surface_lower, [])
+
+    if len(results) < 3:
+        return None  # Pas assez de matchs sur cette surface
+
+    DECAY_CONSTANT = 60.0  # Plus petit = plus de poids aux matchs récents
+
+    weighted_wins = 0.0
+    total_weight = 0.0
+
+    for r in results:
+        weight = math.exp(-r.days_ago / DECAY_CONSTANT)
+        if r.won:
+            weighted_wins += weight
+        total_weight += weight
+
+    if total_weight == 0:
+        return None
+
+    return weighted_wins / total_weight
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
@@ -104,8 +151,8 @@ def _detect_surface(tournament_name: str) -> str:
 
 def _process_match(winner_key: int, winner_name: str,
                    loser_key: int, loser_name: str,
-                   surface: str):
-    """Traite un match et met à jour les ratings Elo."""
+                   surface: str, days_ago: int):
+    """Traite un match : met à jour Elo + historique surface."""
     if winner_key not in _elo_ratings:
         _elo_ratings[winner_key] = PlayerElo(name=winner_name, player_key=winner_key)
     if loser_key not in _elo_ratings:
@@ -114,13 +161,13 @@ def _process_match(winner_key: int, winner_name: str,
     winner = _elo_ratings[winner_key]
     loser = _elo_ratings[loser_key]
 
-    # Elo Global
+    # ── Elo Global ──
     k = (get_k_factor(winner.matches_played) + get_k_factor(loser.matches_played)) / 2
     new_w, new_l = update_elo(winner.elo_global, loser.elo_global, k)
     winner.elo_global = new_w
     loser.elo_global = new_l
 
-    # Elo Surface
+    # ── Elo Surface ──
     if surface == "clay":
         new_w, new_l = update_elo(winner.elo_clay, loser.elo_clay, SURFACE_K_FACTOR)
         winner.elo_clay = new_w
@@ -134,6 +181,17 @@ def _process_match(winner_key: int, winner_name: str,
         winner.elo_hard = new_w
         loser.elo_hard = new_l
 
+    # ── Historique surface (pour win rate pondéré) ──
+    surface_lower = surface.lower()
+    if surface_lower in winner.surface_results:
+        winner.surface_results[surface_lower].append(
+            SurfaceResult(won=True, days_ago=days_ago)
+        )
+    if surface_lower in loser.surface_results:
+        loser.surface_results[surface_lower].append(
+            SurfaceResult(won=False, days_ago=days_ago)
+        )
+
     winner.matches_played += 1
     loser.matches_played += 1
 
@@ -141,10 +199,7 @@ def _process_match(winner_key: int, winner_name: str,
 # ── Chargement ────────────────────────────────────────────────────────────────
 
 async def load_elo_ratings():
-    """
-    Charge les résultats des X derniers jours et calcule les Elo.
-    Chaque jour = 1 requête API.
-    """
+    """Charge les résultats des X derniers jours et calcule les Elo."""
     global _elo_loaded
     if _elo_loaded:
         return
@@ -156,7 +211,6 @@ async def load_elo_ratings():
     days_loaded = 0
 
     async with aiohttp.ClientSession() as session:
-        # Parcourir les jours du plus ancien au plus récent
         for i in range(DAYS_TO_LOAD, 0, -1):
             day = today - timedelta(days=i)
             date_str = day.strftime("%Y-%m-%d")
@@ -188,7 +242,6 @@ async def load_elo_ratings():
                 if not first_key or not second_key:
                     continue
 
-                # Ignorer les doubles
                 event_type = match.get("event_type_type", "")
                 if "double" in event_type.lower():
                     continue
@@ -196,9 +249,9 @@ async def load_elo_ratings():
                 surface = _detect_surface(tournament)
 
                 if winner == "First Player":
-                    _process_match(first_key, first_name, second_key, second_name, surface)
+                    _process_match(first_key, first_name, second_key, second_name, surface, i)
                 elif winner == "Second Player":
-                    _process_match(second_key, second_name, first_key, first_name, surface)
+                    _process_match(second_key, second_name, first_key, first_name, surface, i)
 
                 day_matches += 1
 
@@ -225,12 +278,10 @@ def get_elo_by_name(player_name: str) -> Optional[PlayerElo]:
     """Cherche un joueur par nom (correspondance partielle)."""
     name_lower = player_name.lower().strip()
 
-    # Recherche exacte
     for elo in _elo_ratings.values():
         if elo.name.lower().strip() == name_lower:
             return elo
 
-    # Recherche par nom de famille
     parts = name_lower.split()
     target_surname = parts[-1] if parts else ""
     for elo in _elo_ratings.values():
@@ -239,7 +290,6 @@ def get_elo_by_name(player_name: str) -> Optional[PlayerElo]:
         if target_surname and len(target_surname) > 2 and target_surname == elo_surname:
             return elo
 
-    # Recherche souple
     for elo in _elo_ratings.values():
         if len(target_surname) > 2 and target_surname in elo.name.lower():
             return elo
@@ -260,5 +310,4 @@ def get_surface_elo(player_key: int, surface: str) -> float:
 
 
 def elo_win_probability(elo_a: float, elo_b: float) -> float:
-    """Calcule la probabilité de victoire du joueur A basée sur le Elo."""
     return expected_score(elo_a, elo_b)

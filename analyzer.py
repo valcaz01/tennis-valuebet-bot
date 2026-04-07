@@ -1,15 +1,18 @@
 """
 Moteur d'analyse : calcul des probabilités estimées et détection des value bets
-Intègre le rating Elo + contexte tournoi comme facteurs.
+Intègre Elo + contexte tournoi + surface dynamique pondérée.
 """
 
 import logging
 import math
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional
 from data_fetcher import Match, fetch_player_stats, fetch_h2h, get_average_odds
-from elo import get_elo_by_name, elo_win_probability, DEFAULT_ELO
+from elo import (
+    get_elo_by_name, elo_win_probability, DEFAULT_ELO,
+    get_weighted_surface_winrate
+)
 from context import compute_context_score
 from config import FACTOR_WEIGHTS, MIN_EDGE, KELLY_FRACTION, BANKROLL
 
@@ -108,10 +111,31 @@ def score_recent_form(stats1: dict, stats2: dict) -> float:
     return rate1 / total
 
 
-def score_surface(stats1: dict, stats2: dict, surface: str) -> float:
-    surface_key = surface.lower()
-    wr1 = stats1.get("surface_win_rates", {}).get(surface_key, 0.5)
-    wr2 = stats2.get("surface_win_rates", {}).get(surface_key, 0.5)
+def score_surface(player1_name: str, player2_name: str,
+                  stats1: dict, stats2: dict, surface: str) -> float:
+    """
+    Score surface dynamique avec pondération récente.
+    Utilise d'abord le win rate pondéré des 90 derniers jours (elo module).
+    Fallback sur les stats API-Tennis si pas assez de données récentes.
+    """
+    # Essayer le win rate pondéré récent (depuis le module elo)
+    elo1 = get_elo_by_name(player1_name)
+    elo2 = get_elo_by_name(player2_name)
+
+    wr1 = None
+    wr2 = None
+
+    if elo1:
+        wr1 = get_weighted_surface_winrate(elo1.player_key, surface)
+    if elo2:
+        wr2 = get_weighted_surface_winrate(elo2.player_key, surface)
+
+    # Fallback sur les stats API-Tennis si pas de données récentes
+    if wr1 is None:
+        wr1 = stats1.get("surface_win_rates", {}).get(surface.lower(), 0.5)
+    if wr2 is None:
+        wr2 = stats2.get("surface_win_rates", {}).get(surface.lower(), 0.5)
+
     total = wr1 + wr2
     if total == 0:
         return 0.5
@@ -147,7 +171,7 @@ def estimate_probability(
 ) -> tuple[float, dict]:
     """
     Calcule la probabilité estimée que le joueur 1 gagne.
-    7 facteurs pondérés incluant Elo et contexte tournoi.
+    7 facteurs pondérés incluant Elo, surface dynamique et contexte.
     """
     w = FACTOR_WEIGHTS
 
@@ -164,7 +188,7 @@ def estimate_probability(
         "elo":          score_elo(player1_name, player2_name, surface),
         "ranking":      score_ranking(stats1, stats2),
         "recent_form":  score_recent_form(stats1, stats2),
-        "surface":      score_surface(stats1, stats2, surface),
+        "surface":      score_surface(player1_name, player2_name, stats1, stats2, surface),
         "h2h":          score_h2h(h2h),
         "fatigue":      score_fatigue(stats1, stats2),
         "context":      ctx_score,
