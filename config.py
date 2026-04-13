@@ -50,31 +50,9 @@ FACTOR_WEIGHTS = {
 SCAN_INTERVAL_MINUTES = int(os.getenv("SCAN_INTERVAL", "30"))
 
 # ── Tournois à couvrir (The Odds API) ───────────────────────
+# Les clés génériques tennis_atp et tennis_wta retournent automatiquement
+# tous les tournois actifs en cours. Pas besoin de maintenir une liste.
 TENNIS_SPORTS = [
-    "tennis_atp_french_open",
-    "tennis_wta_french_open",
-    "tennis_atp_us_open",
-    "tennis_wta_us_open",
-    "tennis_atp_wimbledon",
-    "tennis_wta_wimbledon",
-    "tennis_atp_australian_open",
-    "tennis_wta_australian_open",
-    "tennis_atp_monte_carlo_masters",
-    "tennis_atp_miami_open",
-    "tennis_atp_madrid_open",
-    "tennis_atp_rome_masters",
-    "tennis_atp_indian_wells",
-    "tennis_atp_canadian_open",
-    "tennis_atp_cincinnati_masters",
-    "tennis_atp_shanghai_masters",
-    "tennis_atp_paris_masters",
-    "tennis_wta_miami_open",
-    "tennis_wta_madrid_open",
-    "tennis_wta_rome_masters",
-    "tennis_wta_indian_wells",
-    "tennis_wta_canadian_open",
-    "tennis_wta_cincinnati",
-    "tennis_wta_beijing",
     "tennis_atp",
     "tennis_wta",
 ]
